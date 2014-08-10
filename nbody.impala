@@ -40,6 +40,8 @@ static mut bodies = [
    }
 ];
 
+static N = 5;
+
 fn range(a: int, b: int, body: fn(int, fn())) -> () {
     if a < b {
         body(a);
@@ -95,25 +97,19 @@ fn energy(nbodies: int, bodies: &[planet]) -> f64 {
     e
 }
 
-//
-//void offset_momentum(int nbodies, planet *bodies)
-//{
-//   int i, k;
-//   for (i = 0; i < nbodies; i++)
-//      for_k { bodies[0].v[k] -= bodies[i].v[k] * bodies[i].mass / solar_mass; }
-//}
-//
-//#define N sizeof(bodies)/sizeof(planet)
-//
-//int main(int argc, char **argv)
-//{
-//   int n = atoi(argv[1]);
-//
-//   offset_momentum(N, bodies);
-//   printf("%.9f\n", energy(N, bodies));
-//
-//   advance(N, bodies, 0.01, n);
-//
-//   printf("%.9f\n", energy(N, bodies));
-//   return 0;
-//}
+fn offset_momentum(nbodies: int, mut bodies: &[planet]) -> () {
+    for i in range(0, nbodies) {
+        for k in @range(0, 3) {
+            bodies(0).v(k) -= bodies(i).v(k) * bodies(i).mass / solar_mass
+        }
+    }
+}
+
+fn main() -> int {
+    let n = 50000000;
+    offset_momentum(N, &bodies);
+    //printf("%.9f\n", energy(N, bodies));
+    advance(N, &bodies, 0.01, n);
+    //printf("%.9f\n", energy(N, bodies));
+    0
+}
