@@ -1,0 +1,84 @@
+static mut s = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+static mut t = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+static maxflips = 0;
+static max_n = 12;
+static mut odd = 0;
+static mut checksum = 0;
+
+fn range(a: int, b: int, body: fn(int, fn())) -> () {
+    if a < b {
+        body(a);
+        range(a+1, b, body, return)
+    }
+}
+
+fn flip() -> int {
+  for i in range(0, max_n) {
+      s(i) = t(i)
+  }
+
+  do {
+     for (x = t, y = t + t[0]; x < y; )
+        c = *x, *x++ = *y, *y-- = c;
+     i++;
+  } while (t[t[0]]);
+  return i;
+}
+
+//inline void rotate(int n)
+//{
+//   elem c;
+//   register int i;
+//   c = s[0];
+//   for (i = 1; i <= n; i++) s[i-1] = s[i];
+//   s[n] = c;
+//}
+//
+///* Tompkin-Paige iterative perm generation */
+//void tk(int n)
+//{
+//   int i = 0, f;
+//   elem c[16] = {0};
+//
+//   while (i < n) {
+//      rotate(i);
+//      if (c[i] >= i) {
+//         c[i++] = 0;
+//         continue;
+//      }
+//
+//      c[i]++;
+//      i = 1;
+//      odd = ~odd;
+//      if (*s) {
+//         f = s[s[0]] ? flip() : 1;
+//         if (f > maxflips) maxflips = f;
+//         checksum += odd ? -f : f;
+//      }
+//   }
+//}
+//
+//int main(int argc, char **v)
+//{
+//   int i;
+//
+//   if (argc < 2) {
+//      fprintf(stderr, "usage: %s number\n", v[0]);
+//      exit(1);
+//   }
+//
+//   max_n = atoi(v[1]);
+//   if (max_n < 3 || max_n > 15) {
+//      fprintf(stderr, "range: must be 3 <= n <= 12\n");
+//      exit(1);
+//   }
+//
+//   for (i = 0; i < max_n; i++) s[i] = i;
+//   tk(max_n);
+//
+//   printf("%d\nPfannkuchen(%d) = %d\n", checksum, max_n, maxflips);
+//
+//   return 0;
+//}
+//
