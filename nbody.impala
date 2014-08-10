@@ -64,10 +64,10 @@ fn advance(nbodies: int, bodies: &[planet], dt: f64, steps: int) -> () {
             }
         }
 
-        for (a = bodies, i = 0; i < nbodies; i++, a++) {
-            a->x[0] += dt * a->v[0];
-            a->x[1] += dt * a->v[1];
-            a->x[2] += dt * a->v[2];
+        for i in range(0, nbodies) {
+            bodies(i)->x(0) += dt * bodies(i)->v(0);
+            bodies(i)->x(1) += dt * bodies(i)->v(1);
+            bodies(i)->x(2) += dt * bodies(i)->v(2);
         }
     }
 }
