@@ -1,3 +1,7 @@
+extern "C" {
+    fn sqrt(f64) -> f64;
+}
+
 static pi           = 3.141592653589793;
 static solar_mass   = 4.0 * pi * pi;
 static year         = 365.24;
@@ -37,37 +41,37 @@ static mut bodies = [
 ];
 
 fn range(a: int, b: int, body: fn(int, fn())) -> () {
-    if range < b {
-        range(a);
-        iterate(a+1, b, body, return)
+    if a < b {
+        body(a);
+        range(a+1, b, body, return)
     }
 }
 
-fn advance(nbodies: int, bodies: &[planet], dt: f64, steps: int) -> () {
+fn advance(nbodies: int, mut bodies: &[planet], dt: f64, mut steps: int) -> () {
     while steps-- != 0 {
         for i in range(0, nbodies) {
             for j in range(i+1, nbodies) {
-                let d0 = bodies(i)->x[0] - bodies(j)->x[0];
-                let d1 = bodies(i)->x[1] - bodies(j)->x[1];
-                let d2 = bodies(i)->x[2] - bodies(j)->x[2];
+                let d0 = bodies(i).x(0) - bodies(j).x(0);
+                let d1 = bodies(i).x(1) - bodies(j).x(1);
+                let d2 = bodies(i).x(2) - bodies(j).x(2);
 
                 let d = d0*d0 + d1*d1 + d2*d2;
                 let mag = dt / (d * sqrt(d));
 
-                bodies(i)->v[0] -= d[0] * bodies(j)->mass * mag;
-                bodies(i)->v[1] -= d[1] * bodies(j)->mass * mag;
-                bodies(i)->v[2] -= d[2] * bodies(j)->mass * mag;
+                bodies(i).v(0) -= d0 * bodies(j).mass * mag;
+                bodies(i).v(1) -= d1 * bodies(j).mass * mag;
+                bodies(i).v(2) -= d2 * bodies(j).mass * mag;
 
-                bodies(j)->v[0] += d[0] * a->mass * mag;
-                bodies(j)->v[1] += d[1] * a->mass * mag;
-                bodies(j)->v[2] += d[2] * a->mass * mag;
+                bodies(j).v(0) += d0 * bodies(i).mass * mag;
+                bodies(j).v(1) += d1 * bodies(i).mass * mag;
+                bodies(j).v(2) += d2 * bodies(i).mass * mag;
             }
         }
 
         for i in range(0, nbodies) {
-            bodies(i)->x(0) += dt * bodies(i)->v(0);
-            bodies(i)->x(1) += dt * bodies(i)->v(1);
-            bodies(i)->x(2) += dt * bodies(i)->v(2);
+            bodies(i).x(0) += dt * bodies(i).v(0);
+            bodies(i).x(1) += dt * bodies(i).v(1);
+            bodies(i).x(2) += dt * bodies(i).v(2);
         }
     }
 }
