@@ -1,11 +1,10 @@
 MAKE:
-/usr/bin/gcc -pipe -Wall -O3 -fomit-frame-pointer -march=native -fopenmp -mfpmath=sse -msse2 spectralnorm.gcc-3.c -o spectralnorm.gcc-3.gcc_run -lm
-rm spectralnorm.gcc-3.c
-0.15s to complete and log all make actions
+/usr/bin/gcc -pipe -Wall -O3 -fomit-frame-pointer -march=native -fopenmp -mfpmath=sse -msse2 spectralnorm.c -o spectralnorm.gcc_run -lm
+rm spectralnorm.c
+0.18s to complete and log all make actions
 
 COMMAND LINE:
-./spectralnorm.gcc-3.gcc_run 5500
-
+./spectralnorm.gcc_run 5500
 
 MAKE:
 mv spectralnorm.ghc-4.ghc spectralnorm.ghc-4.hs
