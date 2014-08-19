@@ -105,11 +105,10 @@ fn offset_momentum(nbodies: int, mut bodies: &[planet]) -> () {
     }
 }
 
-fn main() -> int {
+fn main() -> () {
     let n = 50000000;
     offset_momentum(N, (&bodies) as &[planet]);
     print_f64(energy(N, (&bodies) as &[planet]));
     advance(N, (&bodies) as &[planet], 0.01, n);
     print_f64(energy(N, (&bodies) as &[planet]));
-    0
 }

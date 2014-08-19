@@ -3,7 +3,7 @@
 int main_impala();
 
 int main() {
-    return main_impala();
+    main_impala();
 }
 
 void print_f64(double d) {
