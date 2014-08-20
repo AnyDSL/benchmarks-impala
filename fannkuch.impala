@@ -53,7 +53,7 @@ fn rotate(n: int) -> () {
 /* Tompkin-Paige iterative perm generation */
 fn tk(n: int) -> () {
     let mut c = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    take_address(&c);
+    take_address(&c); // HACK to prevent SSA contruction of c
     let mut i = 0;
     while i < n {
         rotate(i);
