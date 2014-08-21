@@ -13,29 +13,22 @@ fn range(a: int, b: int, body: fn(int, fn())) -> () {
 fn main() -> int {
     let w = 16000; // fixed command line input
     let h = 16000; // fixed command line input
-    let mut bit_num = 0;
-    
-    let mut byte_acc = 0i8;
     let iter = 50;
     let limit = 2.0;
-    
-    let mut Zr: f64;
-    let mut Zi: f64;
-    let mut Cr: f64;
-    let mut Ci: f64;
-    let mut Tr: f64;
-    let mut Ti: f64;
 
     print_header(w, h);
 
+    let mut bit_num = 0;
+    let mut byte_acc = 0i8;
+    
     for y in range(0, h) {
         for x in range(0, w) {
-            Zr = 0.0;
-            Zi = 0.0;
-            Tr = 0.0;
-            Ti = 0.0;
-            Cr = (2.0*(x as f64)/(w as f64) - 1.5);
-            Ci = (2.0*(y as f64)/(h as f64) - 1.0);
+            let mut Zr = 0.0;
+            let mut Zi = 0.0;
+            let mut Tr = 0.0;
+            let mut Ti = 0.0;
+            let Cr = (2.0*(x as f64)/(w as f64) - 1.5);
+            let Ci = (2.0*(y as f64)/(h as f64) - 1.0);
         
             for i in range(0, iter) {
                 if Tr+Ti > limit*limit {
