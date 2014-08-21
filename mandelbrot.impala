@@ -15,9 +15,9 @@ fn main() -> int {
     let h = 16000; // fixed command line input
     let mut bit_num = 0;
     
-    let mut byte_acc : i8 = (0 as i8);
+    let mut byte_acc = 0i8;
     let iter = 50;
-    let limit: f64 = 2.0;
+    let limit = 2.0;
     
     let mut Zr: f64;
     let mut Zi: f64;
@@ -47,20 +47,20 @@ fn main() -> int {
                 Ti = Zi * Zi;
             }
        
-            byte_acc <<= 1 as i8; 
+            byte_acc <<= 1i8; 
             if (Tr+Ti <= limit*limit) {
-                byte_acc |= 0x01 as i8;
+                byte_acc |= 0x01i8;
             }
             
             ++bit_num; 
 
             if bit_num == 8 {
                 put_i8(byte_acc);
-                byte_acc = 0 as i8;
+                byte_acc = 0i8;
                 bit_num = 0;
             } else if x == w-1 {
                 put_i8(byte_acc << ((8-w%8) as i8));
-                byte_acc = 0 as i8;
+                byte_acc = 0i8;
                 bit_num = 0;
             }
         }
