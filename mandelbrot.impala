@@ -41,7 +41,7 @@ fn main() -> int {
             }
        
             byte_acc <<= 1i8; 
-            if (Tr+Ti <= limit*limit) {
+            if Tr+Ti <= limit*limit {
                 byte_acc |= 0x01i8;
             }
             
