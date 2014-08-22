@@ -2,7 +2,7 @@
 
 clang -O2 lib.c -c
 
-for F in fannkuch mandelbrot nbody
+for F in fannkuch mandelbrot nbody spectral
 do
     echo ">>> building ${F}_c.out"
     clang -O2 ${F}.c -o ${F}_c.out -lm
