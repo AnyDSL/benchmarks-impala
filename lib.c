@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 
 int main_impala();
 
@@ -20,4 +21,10 @@ void print_header(int w, int h) {
 
 void put_i8(char c) {
    putc(c, stdout);
+}
+
+void* thorin_malloc(size_t size) { 
+    void* p;
+    posix_memalign(&p, 64, size);
+    return p;
 }
