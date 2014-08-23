@@ -292,11 +292,11 @@ fn record_piece(piece: i32, minimum: i32, first_empty: i8,
  * they will be left alone.
  */
 fn fill_contiguous_space(board: &[i8], index: i32) -> () {
-   if (board(index) == 1) {
+   if (board(index) == 1i8) {
       return()
    }
    
-   board(index) = 1;
+   board(index) = 1i8;
    if(!out_of_bounds(index, E)) {
       fill_contiguous_space(board, shift(index, E));
    }
@@ -325,7 +325,7 @@ fn fill_contiguous_space(board: &[i8], index: i32) -> () {
  * can split the board in half where both halves are viable.
  */
 fn has_island(cell: &[i8], piece: i32) -> bool {
-   let temp_board: [i8*50]; // TODO maybe use bool here
+   let mut temp_board: [i8*50]; // TODO maybe use bool here
    for i in range(0, 50) {
       temp_board(i) = 0i8;
    }
@@ -336,7 +336,7 @@ fn has_island(cell: &[i8], piece: i32) -> bool {
    while(temp_board(i) == 1i8) {
       i--;
    }
-   fill_contiguous_space(temp_board, i);
+   fill_contiguous_space(&temp_board, i);
    let mut c = 0i8;
    for i in range(0, 50) {
       if(temp_board(i) == 0i8) {
@@ -355,17 +355,17 @@ fn has_island(cell: &[i8], piece: i32) -> bool {
  * degree-rotated pieces of ONE of the pieces.  I chose piece 3 because it gave
  * me the best time ;)
  */
-fn calc_six_rotations(piece: i8, index: i8) -> () {
+fn calc_six_rotations(piece: i32, index: i8) -> () {
    let mut cell: [i8*5];
 
    for rotation in range(0, 6) {
-      if(piece != 3i8 || rotation < 3) { 
-         calc_cell_indices(cell, piece, index);
-         if(cells_fit_on_board(cell, piece) && !has_island(cell, piece)) {
-            let minimum = minimum_of_cells(cell);
-            let first_empty = first_empty_cell(cell, minimum);
-            let piece_mask = bitmask_from_cells(cell);
-            record_piece(piece, minimum, first_empty, piece_mask);
+      if(piece != 3 || rotation < 3) { 
+         calc_cell_indices(&cell, piece, index);
+         if(cells_fit_on_board(&cell, piece) && !has_island(&cell, piece)) {
+            let minimum = minimum_of_cells(&cell);
+            let first_empty = first_empty_cell(&cell, minimum);
+            let piece_mask = bitmask_from_cells(&cell);
+            record_piece(piece, minimum as i32, first_empty, piece_mask);
          }
       }
       rotate_piece(piece);
