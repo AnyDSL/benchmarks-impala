@@ -2,8 +2,8 @@ extern "C" {
     fn print_int(int) -> ();
 }
 
-static mut s = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-static mut t = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+static mut s = [0, .. 16];
+static mut t = [0, .. 16];
 
 static max_n = 12;
 static mut maxflips = 0;
@@ -52,7 +52,7 @@ fn rotate(n: int) -> () {
 
 /* Tompkin-Paige iterative perm generation */
 fn tk(n: int) -> () {
-    let mut c = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut c = [0, .. 16];
     take_address(&c); // HACK to prevent SSA contruction of c
     let mut i = 0;
     while i < n {
