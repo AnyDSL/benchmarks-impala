@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int main_impala();
+void main_impala();
 
 int main() {
     main_impala();
