@@ -9,12 +9,26 @@
 #define TRUE 1
 #define FALSE 0
 
+void print_char(char c) {
+   printf("%c\n", (int)c);
+}
 void print_int(int i) {
    printf("%d\n", i);
 }
 void printa(char* a) {
    printf("%d %d %d %d %d\n", a[0], a[1], a[2], a[3], a[4]);
 }
+void print_piece_def(char* a) {
+    for (int i = 0; i < 40; ++i)
+        printf("%d ", a[i]);
+    printf("\n");
+}
+void print_piece_mask(unsigned long long* a) {
+    for (int i = 0; i < 12; ++i)
+        printf("%lli ", a[i]);
+    printf("\n");
+}
+
 
 /* The board is a 50 cell hexagonal pattern.  For    . . . . .
  * maximum speed the board will be implemented as     . . . . .
@@ -229,10 +243,10 @@ void calc_cell_indices(char *cell, int piece, char index) {
 
 /* Convenience function to quickly calculate if a piece fits on the board */
 int cells_fit_on_board(char *cell, int piece) {
-   return (!out_of_bounds(cell[0], piece_def[piece][0]) &&
-         !out_of_bounds(cell[1], piece_def[piece][1]) && 
-         !out_of_bounds(cell[2], piece_def[piece][2]) && 
-         !out_of_bounds(cell[3], piece_def[piece][3]));
+   return !out_of_bounds(cell[0], piece_def[piece][0]) 
+       && !out_of_bounds(cell[1], piece_def[piece][1]) 
+       && !out_of_bounds(cell[2], piece_def[piece][2]) 
+       && !out_of_bounds(cell[3], piece_def[piece][3]);
 }
 
 /* Returns the lowest index of the cells of a piece.
@@ -326,8 +340,7 @@ int has_island(char *cell, int piece) {
    for(i = 0; i < 50; i++)
       if(temp_board[i] == 0)
          c++;
-   if(c == 0 || (c == 5 && piece == 8) || (c == 40 && piece == 8) ||
-         (c % 5 == 0 && piece == 0))
+   if(c == 0 || (c == 5 && piece == 8) || (c == 40 && piece == 8) || (c % 5 == 0 && piece == 0))
       return FALSE;
    else
       return TRUE;   
@@ -348,10 +361,7 @@ void calc_six_rotations(char piece, char index) {
 
    for(rotation = 0; rotation < 6; rotation++) {
       if(piece != 3 || rotation < 3) { 
-            print_int(piece);
-            print_int(index);
          calc_cell_indices(cell, piece, index);
-         printa(cell);
          if(cells_fit_on_board(cell, piece) && !has_island(cell, piece)) {
             minimum = minimum_of_cells(cell);
             first_empty = first_empty_cell(cell, minimum);
