@@ -10,12 +10,14 @@ extern "C" {
    fn print_meteor_lines(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8) -> ();
 }
 
-fn range(a: int, b: int, body: fn(int, fn())) -> () {
+fn range_step(a: int, b: int, step: int, body: fn(int, fn())) -> () {
     if a < b {
         body(a);
-        range(a+1, b, body, return)
+        range(a+step, b, body, return)
     }
 }
+
+fn range(a: int, b: int, body: fn(int, fn())) -> () { range(a, b, 1, body); }
 
 /* The board is a 50 cell hexagonal pattern.  For    . . . . .
  * maximum speed the board will be implemented as     . . . . .
@@ -613,16 +615,15 @@ fn find_minmax(mut ary: &[[i8]], size: i32) -> (&[i8], &[i8]) {
 
 /* pretty print a board in the specified hexagonal format */
 fn pretty(b: &[i8]) -> () {
-   for idx in range(0, 5) {
-      let i = idx * 10;
-      print_meteor_lines(b(i), b(i+1), b(i+2), b(i+3), b(i+4), b(i+5),
-            b(i+6), b(i+7), b(i+8), b(i+9));
-   }
-   println();
+    for i in range_step(0, 50, 10) {
+      print_meteor_lines(b(i), b(i+1), b(i+2), b(i+3), b(i+4), b(i+5), b(i+6), b(i+7), b(i+8), b(i+9));
+    }
+    println();
 }
 
 fn main() -> i32 {
    calc_pieces();
+   pretty();
    calc_rows();
    solve(0, 0);
    print_meteor_scnt(solution_count);
