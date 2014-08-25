@@ -534,7 +534,7 @@ static mut sol_nums: [i8*10];
 static mut sol_masks: [u64*10];
 static mut solutions: [[i8*50]*2100];
 static mut solution_count = 0;
-static max_solutions = 200;
+static max_solutions = 2098;
 
 fn record_solution() -> () {
    for sol_no in range(0, 10) {
