@@ -27,7 +27,7 @@ fn eval_At_times_u(N: int, u: &[f64], mut Au: &[f64]) -> () {
     for i in range(0, N) {
         Au(i) = 0.0;
         for j in range(0, N) {
-            Au(i) += eval_A(j, i)*u(j);
+            Au(i) += eval_A(j, i) * u(j);
         }
     }
 }
