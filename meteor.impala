@@ -545,7 +545,7 @@ fn solve(depth: i32, mut cell: i32) -> () {
       return()
    }
 
-   while ((board & (1i64 << (cell as i64))) != 0i64) {
+   while (board & (1i64 << (cell as i64))) != 0i64 {
       cell++;
    }
 
