@@ -9,6 +9,13 @@
 #define TRUE 1
 #define FALSE 0
 
+void print_int(int i) {
+   printf("%d\n", i);
+}
+void printa(char* a) {
+   printf("%d %d %d %d %d\n", a[0], a[1], a[2], a[3], a[4]);
+}
+
 /* The board is a 50 cell hexagonal pattern.  For    . . . . .
  * maximum speed the board will be implemented as     . . . . .
  * 50 bits, which will fit into a 64 bit long long   . . . . .
@@ -341,7 +348,10 @@ void calc_six_rotations(char piece, char index) {
 
    for(rotation = 0; rotation < 6; rotation++) {
       if(piece != 3 || rotation < 3) { 
+            print_int(piece);
+            print_int(index);
          calc_cell_indices(cell, piece, index);
+         printa(cell);
          if(cells_fit_on_board(cell, piece) && !has_island(cell, piece)) {
             minimum = minimum_of_cells(cell);
             first_empty = first_empty_cell(cell, minimum);

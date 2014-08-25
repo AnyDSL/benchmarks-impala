@@ -6,12 +6,16 @@
 
 extern "C" {
     fn println() -> ();
+    fn printa(&[i8]) -> ();
     fn print_char(u8) -> ();
     fn print_int(int) -> ();
     fn print_f64(f64) -> ();
     fn print_meteor_scnt(i32) -> ();
     fn print_meteor_lines(i8, i8, i8, i8, i8, i8, i8, i8, i8, i8) -> ();
+    fn mshift(int, int) -> int;
 }
+
+fn shift(cell: i8, dir: i8) -> i8 { mshift(cell as int, dir as int) as i8 }
 
 fn range_step(a: int, b: int, step: int, body: fn(int, fn())) -> () {
     if a < b {
@@ -123,6 +127,7 @@ fn flip(dir: i8) -> i8 {
  * out_of_bounds function first.
  */
 // TODO maybe use return(x) here
+/*
 fn shift(cell: i8, dir: i8) -> i8 {
    if dir == E {
       cell + 1_i8
@@ -184,6 +189,7 @@ fn shift(cell: i8, dir: i8) -> i8 {
       cell
    }
 }
+*/
 
 /* Returns wether the specified cell and direction will land outside
  * of the board.  Used to determine if a piece is at a legal board
@@ -372,7 +378,10 @@ fn calc_six_rotations(piece: i8, index: i8) -> () {
 
     for rotation in range_i8(0_i8, 6_i8) {
         if piece != 3_i8 || rotation < 3_i8 { 
+            print_int(piece as int);
+            print_int(index as int);
             calc_cell_indices(&cell, piece as int, index);
+            printa(&cell);
             if cells_fit_on_board(&cell, piece as int) && !has_island(&cell, piece as int) {
                 let minimum = minimum_of_cells(&cell);
                 let first_empty = first_empty_cell(&cell, minimum);
@@ -531,7 +540,7 @@ static mut sol_nums: [i8*10];
 static mut sol_masks: [i64*10];
 static mut solutions: [[i8*50]*2100];
 static mut solution_count = 0;
-static max_solutions = 2100;
+static max_solutions = 200;
 
 fn record_solution() -> () {
    for sol_no in range(0, 10) {
