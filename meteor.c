@@ -268,8 +268,7 @@ unsigned long long bitmask_from_cells(char *cell) {
 /* Record the piece and other important information in arrays that will
  * later be used by the solve function.
  */
-void record_piece(int piece, int minimum, char first_empty,
-      unsigned long long piece_mask) {
+void record_piece(int piece, int minimum, char first_empty, unsigned long long piece_mask) {
    pieces[piece][minimum][piece_counts[piece][minimum]] = piece_mask;
    next_cell[piece][minimum][piece_counts[piece][minimum]] = first_empty;
    piece_counts[piece][minimum]++;         
@@ -335,7 +334,7 @@ int has_island(char *cell, int piece) {
  * degree-rotated pieces of ONE of the pieces.  I chose piece 3 because it gave
  * me the best time ;)
  */
- void calc_six_rotations(char piece, char index) {
+void calc_six_rotations(char piece, char index) {
    char rotation, cell[5];
    char minimum, first_empty;
    unsigned long long piece_mask;
