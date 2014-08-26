@@ -60,3 +60,7 @@ void print_meteor_scnt(int cnt) {
 void print_meteor_lines(char a0, char a1, char a2, char a3, char a4, char a5, char a6, char a7, char a8, char a9) {
    printf("%c %c %c %c %c \n %c %c %c %c %c \n", a0+'0', a1+'0', a2+'0', a3+'0', a4+'0', a5+'0', a6+'0', a7+'0', a8+'0', a9+'0');
 }
+
+void write(const char* line, size_t size) {
+    fwrite(line, size, 1, stdout);
+}
