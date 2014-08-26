@@ -9,27 +9,6 @@
 #define TRUE 1
 #define FALSE 0
 
-void print_char(char c) {
-   printf("%c\n", (int)c);
-}
-void print_int(int i) {
-   printf("%d\n", i);
-}
-void printa(char* a) {
-   printf("%d %d %d %d %d\n", a[0], a[1], a[2], a[3], a[4]);
-}
-void print_piece_def(char* a) {
-    for (int i = 0; i < 40; ++i)
-        printf("%d ", a[i]);
-    printf("\n");
-}
-void print_piece_mask(unsigned long long* a) {
-    for (int i = 0; i < 12; ++i)
-        printf("%lli ", a[i]);
-    printf("\n");
-}
-
-
 /* The board is a 50 cell hexagonal pattern.  For    . . . . .
  * maximum speed the board will be implemented as     . . . . .
  * 50 bits, which will fit into a 64 bit long long   . . . . .
