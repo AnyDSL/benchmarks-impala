@@ -1,96 +1,71 @@
 /* The Computer Language Benchmarks Game
  * http://benchmarksgame.alioth.debian.org/
-
-   contributed by Mr Ledrug
-*/
-
-#define _GNU_SOURCE
-#include <sched.h>
+ *
+ * contributed by Bob W 
+ */
 #include <stdio.h>
 #include <stdlib.h>
-#include <ctype.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <string.h>
 
-char *pairs = "ATCGGCTAUAMKRYWWSSYRKMVBHDDHBVNN\n\n";
-char tbl[128];
+#define JBFSIZE 82      // line input buffer size
+#define QBFSIZE 5200     // output buffer initial size
+#define Z16     "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+#define V32     "\0TVGH\0\0CD\0\0M\0KN\0\0\0YSA\0BW\0R\0\0\0\0\0\0"
+#define VALL    Z16 Z16 Z16 Z16 V32 V32 Z16 Z16 Z16 Z16 Z16 Z16 Z16 Z16
 
-typedef struct work_s work_t;
-struct work_s {
-   pthread_t id;
-   work_t *next;
-   char *begin, *end;
-};
-
-void *process(void *ww) {
-   work_t *w = ww;
-   char *from = w->begin, *to = w->end;
-   while (*from++ != '\n');
-
-   size_t len = to - from;
-   size_t off = 60 - (len % 61);
-
-   if (off) {
-      char *m;
-      for (m = from + 60 - off; m < to; m += 61) {
-         memmove(m + 1, m, off);
-         *m = '\n';
-      }
-   }
-
-   char c;
-   for (to--; from <= to; from++, to--)
-      c = tbl[(int)*from], *from = tbl[(int)*to], *to = c;
-
-   return 0;
+int errex(char *s, int n) {      // error message+value, return 1
+  fprintf(stderr,"\n*** Error: %s [%d]!\n", s, n);
+  return 1;
 }
 
-int main() {
-   char *s;
-   for (s = pairs; *s; s += 2) {
-      tbl[toupper(s[0])] = s[1];
-      tbl[tolower(s[0])] = s[1];
-   }
+int main () {                    // ***** main *****
+  char *pj, *pq, *pr;            // buffer pointers: inp,out,/out
+  char *jjj = malloc(JBFSIZE);   // allocate input line buffer
+  char *qqq = malloc(QBFSIZE);   // output buffer (dyn. size)
+  char *pqstop = qqq+QBFSIZE;    // end-of-buffer pointer
+  char xtab[256] = VALL;         // char conversion table
 
+  if (!jjj || !qqq)
+    return errex("Buffer allocation", !jjj + !qqq);
+  pj = fgets(jjj,JBFSIZE,stdin);         // fetch 1st line
 
-   size_t buflen = 1024, len, end = 0;
-   char *buf = malloc(1024);
+  if (!pj)
+    return errex("No input data",0);
+  if (*jjj != '>')
+    return errex("1st char not '>'", 0);
 
-   int in = fileno(stdin);
-   while ((len = read(in, buf + end, buflen - 256 - end))) {
-      end += len;
-      if (end < buflen - 256) break;
-      buf = realloc(buf, buflen *= 2);
-   }
-   buf[end] = '>';
+  while (pj) {                           // MAIN LOOP: process data
+    fputs(jjj, stdout);                  // output ID line
 
-   work_t *work = 0;
-   char *from, *to = buf + end - 1;
-   while (1) {
-      for (from = to; *from != '>'; from--);
+    for (pq=qqq+1, pr=pqstop; ; pq++) {  // LOOP: fill output buffer
+      pj = fgets(jjj, JBFSIZE, stdin);   // get line from stdin
+      if (!pj || (*jjj=='>'))  break;    // EOF or new ID line
+      if (pr <= (pq+61)) {               // need to resize buffer
+        char *newstop = pqstop + 12777888;
+        char *newptr  = realloc(qqq, newstop-qqq);
+        if (!newptr)
+          return errex("Out of memory", 0);
+        if (newptr != qqq) {             // new base: adj. pointers
+          size_t x = newptr-qqq;         // offset for pointer update
+          pq+=x;  pr+=x;  qqq+=x;
+          newstop+=x;  pqstop+=x;
+        }
+        pr = __builtin_memmove(newstop-(pqstop-pr), pr, pqstop-pr);
+        pqstop = newstop;                // buffer resize complete
 
-      work_t *w = malloc(sizeof(work_t));
-      w->begin = from;
-      w->end = to;
-      w->next = work;
-      work = w;
+      }
+      while (*pj) {                      // LOOP: conv. & revert line
+        char c = xtab[(unsigned char)(*pj++)];
+        if (c)                           // conversion valid
+          *(--pr) = c;
+      }
+    }
 
-      pthread_create(&w->id, 0, process, w);
-
-      to = from - 1;
-      if (to < buf) break;
-   }
-
-   while (work) {
-      work_t *w = work;
-      work = work->next;
-      pthread_join(w->id, 0);
-      free(w);
-   }
-
-   write(fileno(stdout), buf, end);
-   free(buf);
-
-   return 0;
+    for (pq = qqq; pr<pqstop; ) {        // LOOP: format output
+      size_t x = (pqstop-pr)<60 ? pqstop-pr : 60;
+      __builtin_memmove(pq,pr,x);        // move line to free space
+      pr+=x;  pq+=x;  *(pq++) = 0xA;     // adjust pointers, add LF
+    }
+    fwrite(qqq, 1, pq-qqq, stdout);      // output converted data
+  }
+  return 0;
 }
