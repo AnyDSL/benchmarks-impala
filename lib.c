@@ -64,3 +64,7 @@ void print_meteor_lines(char a0, char a1, char a2, char a3, char a4, char a5, ch
 void write(const char* line, size_t size) {
     fwrite(line, size, 1, stdout);
 }
+
+void print(const char* s) {
+    fputs(s, stdout);
+}
