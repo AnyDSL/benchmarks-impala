@@ -98,19 +98,18 @@ fn fb_subst(mut dst: &fbuf_t, mut src: &fbuf_t, p: &[u8], mut r: &[u8]) -> u64 {
 
 // Count all matches with pattern p in src buffer.
 fn fb_countmatches(src: &fbuf_t, p: &[u8]) -> int {
-/*
-  pcre *re;
-  pcre_extra *re_ex;
-  const char *re_e;
-  int re_eo, m[3], pos, count;
-  if (!(re = pcre_compile(p, PCRE_CASELESS, &re_e, &re_eo, NULL))) exit(1);
-  re_ex = pcre_study(re, 0, &re_e);
-  for (count = 0, pos = 0;
-       pcre_exec(re, re_ex, src.buf, src.len, pos, 0, m, 3) >= 0;
-       pos = m[1]) count++;
-  return count;
-*/
-    42
+    let mut re_eo: int;
+    let mut re_e: &[u8];
+    let re = pcre_compile(p, PCRE_CASELESS, &re_e, &re_eo, nullptr);
+    let re_ex = pcre_study(re, 0, &re_e);
+    let mut count = 0;
+    let mut pos = 0;
+    let mut m: [int * 3];
+    while pcre_exec(re, re_ex, src.buf, src.len as int, pos, 0, &m, 3) >= 0 {
+        ++count;
+        pos = m(1);
+    }
+    count
 }
 
 
