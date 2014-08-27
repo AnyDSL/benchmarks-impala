@@ -17,14 +17,6 @@ void print_f64(double d) {
    printf("%.9f\n", d);
 }
 
-void println() {
-   printf("\n");
-}
-
-void printa(char* a) {
-   printf("%d %d %d %d %d\n", a[0], a[1], a[2], a[3], a[4]);
-}
-
 void print_piece_mask(unsigned long long* a) {
     for (int i = 0; i < 12; ++i)
         printf("%lli ", a[i]);
@@ -65,6 +57,6 @@ void write(const char* line, size_t size) {
     fwrite(line, size, 1, stdout);
 }
 
-void print(const char* s) {
-    fputs(s, stdout);
+void println(const char* s) {
+    printf("%s\n", s);
 }
