@@ -1,6 +1,6 @@
 /* -*- Mode: c; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
 
-use core::float::{sqrt, abs};
+use core::f64::{sqrt, abs};
 use core::rand::RngUtil;
 use core::io::{Writer, WriterUtil};
 
@@ -11,21 +11,21 @@ static NAO_SAMPLES: uint = 8;
 static NSUBSAMPLES: uint = 2;
 
 mod vector {
-    use core::float::sqrt;
+    use core::f64::sqrt;
 
     pub struct Vector {
-        x: float,
-        y: float,
-        z: float
+        x: f64,
+        y: f64,
+        z: f64
     }
 
     #[inline(always)]
-    pub fn new(x: float, y: float, z: float) -> Vector {
+    pub fn new(x: f64, y: f64, z: f64) -> Vector {
         Vector { x: x, y: y, z: z }
     }
 
     #[inline(always)]
-    pub fn new_normal(x: float, y: float, z: float) -> Vector {
+    pub fn new_normal(x: f64, y: f64, z: f64) -> Vector {
         let mut v = Vector { x: x, y: y, z: z };
         v.normalized();
         return v;
@@ -62,7 +62,7 @@ mod vector {
     }
 
     #[inline(always)]
-    pub fn dot(v0: &Vector, v1: &Vector) -> float {
+    pub fn dot(v0: &Vector, v1: &Vector) -> f64 {
         v0.x * v1.x + v0.y * v1.y + v0.z * v1.z
     }
 
@@ -74,7 +74,7 @@ mod vector {
     }
 
     #[inline(always)]
-    pub fn scale(v: &Vector, s: float) -> Vector {
+    pub fn scale(v: &Vector, s: f64) -> Vector {
         Vector { x: v.x * s, y: v.y * s, z: v.z * s }
     }
 
@@ -97,13 +97,13 @@ struct Ray {
 }
 
 struct IntersectInfo {
-    distance: float,
+    distance: f64,
     position: vector::Vector,
     normal: vector::Vector
 }
 
 enum Object {
-    Sphere(vector::Vector, float),
+    Sphere(vector::Vector, f64),
     Plane(vector::Vector, vector::Vector)
 }
 
@@ -170,28 +170,28 @@ fn ortho_basis(n: vector::Vector) -> [vector::Vector, ..3] {
 
 fn ambient_occlusion(isect: &IntersectInfo,
                      rng: @rand::Rng,
-                     objects: &[Object]) -> float {
+                     objects: &[Object]) -> f64 {
     let eps = 0.0001;
     let ntheta = NAO_SAMPLES;
     let nphi = NAO_SAMPLES;
     let mut ray_origin = isect.position + vector::scale(&isect.normal, eps);
     let basis = ortho_basis(isect.normal);
-    let mut occlusion: float = 0.0;
-    let mut occ_isect = ~IntersectInfo {
+    let mut occlusion: f64 = 0.0;
+    let mut occ_isect = box IntersectInfo {
         distance: 1.0e+9,
         position: vector::new(0.0, 0.0, 0.0),
         normal: vector::new(0.0, 1.0, 0.0)
     };
-    let tau: float = 2.0f * float::consts::pi;
+    let tau: f64 = 2.0f64 * f64::consts::pi;
 
-    for uint::range(0u, ntheta) |_| {
-        for uint::range(0u, nphi) |_| {
-            let theta = sqrt(rng.gen_float());
-            let phi = tau * rng.gen_float();
+    for i in uint::range(0u, ntheta) {
+        for j in uint::range(0u, nphi) {
+            let theta = sqrt(rng.gen_f64());
+            let phi = tau * rng.gen_f64();
 
-            let x = float::cos(phi) * theta;
-            let y = float::sin(phi) * theta;
-            let z = float::sqrt(1.0f - theta * theta);
+            let x = f64::cos(phi) * theta;
+            let y = f64::sin(phi) * theta;
+            let z = f64::sqrt(1.0f64 - theta * theta);
 
             // local -> global
             let direction = vector::Vector {
@@ -210,8 +210,8 @@ fn ambient_occlusion(isect: &IntersectInfo,
             }
         }
     }
-    let theta = ntheta as float;
-    let phi = nphi as float;
+    let theta = ntheta as f64;
+    let phi = nphi as f64;
     return (theta * phi - occlusion) / (theta * phi);
 }
 
@@ -227,7 +227,7 @@ impl Pixel {
     }
 
     #[inline(always)]
-    pub fn new_with_clamp(value: float, mag: float) -> Pixel {
+    pub fn new_with_clamp(value: f64, mag: f64) -> Pixel {
         let v = (value * mag) as uint;
         let i = uint::min(255u, v) as u8;
         return Pixel { r:i, g:i, b:i };
@@ -237,20 +237,20 @@ impl Pixel {
 fn render_line(width: uint, height: uint, _y: uint,
                nsubsamples: uint, objects: &[Object]) -> ~[Pixel] {
     let mut line = vec::with_capacity(width);
-    let sample: float = nsubsamples as float;
+    let sample: f64 = nsubsamples as f64;
     let rng = rand::Rng();
-    let w: float = width as float;
-    let h: float = height as float;
-    let y: float = _y as float;
+    let w: f64 = width as f64;
+    let h: f64 = height as f64;
+    let y: f64 = _y as f64;
     for uint::range(0u, width) |_x| {
-        let mut occlusion = 0.0f;
+        let mut occlusion = 0.0f64;
         for uint::range(0u, nsubsamples) |_u| {
             for uint::range(0u, nsubsamples) |_v| {
-                let x: float = _x as float;
-                let u: float = _u as float;
-                let v: float = _v as float;
-                let px: float = (x + (u / sample) - (w / 2.0f)) / (w / 2.0f);
-                let py: float = -(y + (v / sample) - (h / 2.0f)) / (h / 2.0f);
+                let x: f64 = _x as f64;
+                let u: f64 = _u as f64;
+                let v: f64 = _v as f64;
+                let px: f64 = (x + (u / sample) - (w / 2.0f64)) / (w / 2.0f64);
+                let py: f64 = -(y + (v / sample) - (h / 2.0f64)) / (h / 2.0f64);
                 let ray = Ray { origin: vector::new(0.0, 0.0, 0.0),
                                 direction: vector::new_normal(px, py, -1.0) };
 
@@ -270,7 +270,7 @@ fn render_line(width: uint, height: uint, _y: uint,
             }
         }
         if occlusion > 0.0001 {
-            let c = occlusion / ((nsubsamples * nsubsamples) as float);
+            let c = occlusion / ((nsubsamples * nsubsamples) as f64);
             line.push(Pixel::new_with_clamp(c, 255.0));
         } else {
             line.push(Pixel { r:0u8, g:0u8, b:0u8 });
