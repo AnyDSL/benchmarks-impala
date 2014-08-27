@@ -1,4 +1,5 @@
 type FILE = &u8;
+type PCRE_SPTR = &[u8];
 
 extern "C" {
     fn exit(int) -> ();
@@ -7,7 +8,17 @@ extern "C" {
     fn print_num_matches(&[u8], int) -> ();
     fn fread(&u8, u64, u64, FILE) -> u64;
     fn ferror(FILE) -> bool;
+    fn pcre_compile(&[u8], int, &&[u8], &int, &[u8]) -> &pcre;
+    fn pcre_study(&pcre, int, &&[u8]) -> &pcre_extra;
+    fn pcre_exec(&pcre, &pcre_extra, PCRE_SPTR, int, int, int, &[int], int) -> int;
+    fn strlen(&[u8]) -> u64;
+    fn memcpy(&u8, &u8, u64) -> &[u8];
 }
+
+struct pcre {}
+struct pcre_extra {}
+
+static PCRE_CASELESS = 1;
 
 struct fbuf_t {
     buf:  &[u8],
@@ -24,7 +35,7 @@ fn range(a: int, b: int, body: fn(int, fn())) -> () {
 
 static nullptr = 0 as &[u8];
 
-fn fb_need(mut b: &fbuf_t, mut need: u64) -> &u8 {
+fn fb_need(mut b: &fbuf_t, mut need: u64) -> u64 {
     need += b.len;
     if need > b.size {
         if b.size == 0_u64 {
@@ -39,52 +50,49 @@ fn fb_need(mut b: &fbuf_t, mut need: u64) -> &u8 {
             exit(1);
         }
     }
-    &b.buf(b.len)
+    b.len
 }
 
 static FB_MINREAD = 3_u64 << 16_u64;
 
 // Read all of a stdio stream into dst buffer.
 fn fb_readall(mut dst: &fbuf_t, f: FILE) -> u64 {
-    let mut dp = fb_need(dst, FB_MINREAD);
+    let mut dpi = fb_need(dst, FB_MINREAD);
     while true {
-        let n = fread(dp, 1_u64, dst.size-dst.len, f);
+        let n = fread(&dst.buf(dpi), 1_u64, dst.size-dst.len, f);
         if n == 0_u64 {
             break()
         }
 
-        dp = fb_need(dst, FB_MINREAD);
+        dpi = fb_need(dst, FB_MINREAD);
         dst.len += n;
     }
     dst.len
 }
 
 // Substitute pattern p with replacement r, copying from src to dst buffer.
-fn fb_subst(dst: &fbuf_t, src: &fbuf_t, p: &[u8], r: &[u8]) -> u64 {
-/*
-  pcre *re;
-  pcre_extra *re_ex;
-  const char *re_e;
-  char *dp;
-  int re_eo, m[3], pos, rlen, clen;
-  if (!(re = pcre_compile(p, PCRE_CASELESS, &re_e, &re_eo, NULL))) exit(1);
-  re_ex = pcre_study(re, 0, &re_e);
-  for (dst.len = 0, rlen = strlen(r), pos = 0;
-       pcre_exec(re, re_ex, src.buf, src.len, pos, 0, m, 3) >= 0;
-       pos = m[1]) {
-    clen = m[0]-pos;
-    dp = fb_need(dst, clen+rlen);
-    dst.len += clen+rlen;
-    memcpy(dp, src.buf+pos, clen);
-    memcpy(dp+clen, r, rlen);
-  }
-  clen = src.len-pos;
-  dp = fb_need(dst, clen);
-  dst.len += clen;
-  memcpy(dp, src.buf+pos, clen);
-  return dst.len;
-  */
-    42_u64
+fn fb_subst(mut dst: &fbuf_t, mut src: &fbuf_t, p: &[u8], mut r: &[u8]) -> u64 {
+    let mut re_eo: int;
+    let mut re_e: &[u8];
+    let re = pcre_compile(p, PCRE_CASELESS, &re_e, &re_eo, nullptr);
+    let re_ex = pcre_study(re, 0, &re_e);
+    dst.len = 0_u64;
+    let rlen = strlen(r);
+    let mut pos = 0_u64;
+    let mut m: [int * 3];
+    while pcre_exec(re, re_ex, src.buf, src.len as int, pos as int, 0, &m, 3) >= 0 {
+        let clen = m(0) as u64 - pos;
+        let dpi = fb_need(dst, clen+rlen);
+        dst.len += clen+rlen;
+        memcpy(&dst.buf(dpi), &src.buf(pos), clen);
+        memcpy(&dst.buf(dpi+clen), &r(0), rlen);
+        pos = m(1) as u64;
+    }
+    let clen = src.len-pos;
+    let dpi = fb_need(dst, clen);
+    dst.len += clen;
+    memcpy(&dst.buf(dpi), &src.buf(pos), clen);
+    dst.len
 }
 
 
