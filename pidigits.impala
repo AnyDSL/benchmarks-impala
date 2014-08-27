@@ -52,9 +52,7 @@ fn next_term(k: u64) -> () {
     mpz_mul_ui(&num, &num, k);
 }
 
-fn main() -> () {
-    let n = 10000_u64;
-
+fn main(n: int) -> () {
     mpz_init(&tmp1);
     mpz_init(&tmp2);
 
@@ -64,7 +62,7 @@ fn main() -> () {
 
     let mut k = 0_u64;
     let mut i = 0_u64;
-    while i < n {
+    while i < (n as u64) {
         next_term(++k);
         if mpz_cmp(&num, &acc) > 0 {
             continue()

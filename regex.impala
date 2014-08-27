@@ -140,7 +140,7 @@ static NUM_PAT = 11;
 
 fn take_address(a: &[&[u8]]) -> () {}
 
-fn main() -> () {
+fn main(n: int) -> () {
     let mut seq = [
         fbuf_t{buf: nullptr, size: 0_u64, len: 0_u64},
         fbuf_t{buf: nullptr, size: 0_u64, len: 0_u64}

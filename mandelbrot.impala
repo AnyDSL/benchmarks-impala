@@ -10,9 +10,9 @@ fn range(a: int, b: int, body: fn(int, fn())) -> () {
     }
 }
 
-fn main() -> int {
-    let w = 16000; // fixed command line input
-    let h = 16000; // fixed command line input
+fn main(n: int) -> int {
+    let w = n;
+    let h = n;
     let iter = 50;
     let limit = 2.0;
 

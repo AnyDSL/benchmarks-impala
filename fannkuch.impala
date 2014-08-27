@@ -5,7 +5,7 @@ extern "C" {
 static mut s = [0, .. 16];
 static mut t = [0, .. 16];
 
-static max_n = 12;
+static mut max_n = 12;
 static mut maxflips = 0;
 static mut odd = 0;
 static mut checksum = 0;
@@ -80,7 +80,8 @@ fn tk(n: int) -> () {
     }
 }
 
-fn main() -> () {
+fn main(n: int) -> () {
+    max_n = n;
     for i in range(0, max_n) {
         s(i) = i;
     }

@@ -534,7 +534,7 @@ static mut sol_nums: [i8*10];
 static mut sol_masks: [u64*10];
 static mut solutions: [[i8*50]*2100];
 static mut solution_count = 0;
-static max_solutions = 2098;
+static mut max_solutions = 2098;
 
 fn record_solution() -> () {
    for sol_no in range(0, 10) {
@@ -623,13 +623,13 @@ fn pretty(b: &[i8]) -> () {
     println();
 }
 
-fn main() -> int {
-   calc_pieces();
-   calc_rows();
-   solve(0, 0);
-   print_meteor_scnt(solution_count);
-   let minmax = find_minmax(&solutions, solution_count);
-   pretty(minmax(0));
-   pretty(minmax(1));
-   0
+fn main(n: int) -> () {
+    max_solutions = n;
+    calc_pieces();
+    calc_rows();
+    solve(0, 0);
+    print_meteor_scnt(solution_count);
+    let minmax = find_minmax(&solutions, solution_count);
+    pretty(minmax(0));
+    pretty(minmax(1));
 }
