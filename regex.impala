@@ -2,17 +2,18 @@ type FILE = &u8;
 type PCRE_SPTR = &[u8];
 
 extern "C" {
-    fn exit(int) -> ();
-    fn realloc(&[u8], u64) -> &[u8];
-    fn get_stdin() -> FILE;
-    fn print_num_matches(&[u8], int) -> ();
-    fn fread(&u8, u64, u64, FILE) -> u64;
     fn ferror(FILE) -> bool;
-    fn pcre_compile(&[u8], int, &&[u8], &int, &[u8]) -> &pcre;
-    fn pcre_study(&pcre, int, &&[u8]) -> &pcre_extra;
-    fn pcre_exec(&pcre, &pcre_extra, PCRE_SPTR, int, int, int, &[int], int) -> int;
-    fn strlen(&[u8]) -> u64;
+    fn fread(&u8, u64, u64, FILE) -> u64;
+    fn get_stdin() -> FILE;
     fn memcpy(&u8, &u8, u64) -> &[u8];
+    fn pcre_compile(&[u8], int, &&[u8], &int, &[u8]) -> &pcre;
+    fn pcre_exec(&pcre, &pcre_extra, PCRE_SPTR, int, int, int, &[int], int) -> int;
+    fn pcre_study(&pcre, int, &&[u8]) -> &pcre_extra;
+    fn print_int(int) -> ();
+    fn print_num_matches(&[u8], int) -> ();
+    fn println(&[u8]) -> ();
+    fn realloc(&[u8], u64) -> &[u8];
+    fn strlen(&[u8]) -> u64;
 }
 
 struct pcre {}
@@ -46,9 +47,6 @@ fn fb_need(mut b: &fbuf_t, mut need: u64) -> u64 {
             }
         }
         b.buf = realloc(b.buf, b.size);
-        if b.buf == nullptr {
-            exit(1);
-        }
     }
     b.len
 }
@@ -112,7 +110,6 @@ fn fb_countmatches(src: &fbuf_t, p: &[u8]) -> int {
     count
 }
 
-
 static mut v0 = "agggtaaa|tttaccct";
 static mut v1 = "[cgt]gggtaaa|tttaccc[acg]";
 static mut v2 = "a[act]ggtaaa|tttacc[agt]t";
@@ -124,14 +121,21 @@ static mut v7 = "agggta[cgt]a|t[acg]taccct";
 static mut v8 = "agggtaa[cgt]|[acg]ttaccct";
 static NUM_VARIANTS = 9;
 
-/*
-static NUM_SUBST = 11;
-static subst = [
-  "B", "(c|g|t)", "D", "(a|g|t)",   "H", "(a|c|t)", "K", "(g|t)",
-  "M", "(a|c)",   "N", "(a|c|g|t)", "R", "(a|g)",   "S", "(c|g)",
-  "V", "(a|c|g)", "W", "(a|t)",     "Y", "(c|t)"
-];
-*/
+static mut subst = ["B", "D", "H", "K", "M", "N", "R", "S", "V", "W", "Y"];
+
+static mut pat0  = "(c|g|t)";
+static mut pat1  = "(a|g|t)";
+static mut pat2  = "(a|c|t)";
+static mut pat3  = "(g|t)";
+static mut pat4  = "(a|c)";
+static mut pat5  = "(a|c|g|t)";
+static mut pat6  = "(a|g)";
+static mut pat7  = "(c|g)";
+static mut pat8  = "(a|c|g)";
+static mut pat9  = "(a|t)";
+static mut pat10 = "(c|t)";
+
+static NUM_PAT = 11;
 
 fn take_address(a: &[&[u8]]) -> () {}
 
@@ -149,7 +153,17 @@ fn main() -> () {
     for i in range(0, NUM_VARIANTS) {
         print_num_matches(variants(i), fb_countmatches(&seq(1), variants(i)));
     }
-    //for (slen = 0, flip = 1, pp = subst; *pp; pp += 2, flip = 1-flip)
-        //slen = fb_subst(&seq[1-flip], &seq[flip], *pp, pp[1]);
-    //printf("\n%zu\n%zu\n%zu\n", ilen, clen, slen);
+
+    let mut pat: [&[u8] * 11] = [(&pat0) as &[u8], &pat1, &pat2, &pat3, &pat4, &pat5, &pat6, &pat7, &pat8, &pat9, &pat10];
+    take_address(&pat);
+    let mut slen = 0_u64;
+    let mut flip = 1;
+    for i in range(0, NUM_PAT) {
+        slen = fb_subst(&seq(1-flip), &seq(flip), &subst(i), pat(i));
+        flip = 1-flip;
+    }
+    println("");
+    print_int(ilen as int);
+    print_int(clen as int);
+    print_int(slen as int);
 }
