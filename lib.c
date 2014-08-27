@@ -68,3 +68,7 @@ FILE* get_stdin() {
 void print_num_matches(const char* s, int count) {
     printf("%s %d\n", s, count);
 }
+
+void print_digits(unsigned long long i) {
+    printf("\t:%llu\n", i);
+}
