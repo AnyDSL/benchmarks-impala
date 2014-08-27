@@ -1,33 +1,31 @@
-struct mpz_struct { 
+struct mpz_t {
     a: i32, 
     b: i32, 
     c: &i64,
 }
 
-type mpz_t = &mpz_struct;
-
 extern "C" {
-    fn "__gmpz_add"         mpz_add(mpz_t, mpz_t, mpz_t) -> ();
-    fn "__gmpz_addmul_ui"   mpz_addmul_ui(mpz_t, mpz_t, u64) -> ();
-    fn "__gmpz_submul_ui"   mpz_submul_ui(mpz_t, mpz_t, u64) -> ();
-    fn "__gmpz_cmp"         mpz_cmp(mpz_t, mpz_t) -> int;
-    fn "__gmpz_get_ui"      mpz_get_ui(mpz_t) -> u64;
-    fn "__gmpz_mul_ui"      mpz_mul_ui(mpz_t, mpz_t, u64) -> ();
-    fn "__gmpz_set_ui"      mpz_set_ui(mpz_t, u64) -> ();
-    fn "__gmpz_tdiv_q"      mpz_tdiv_q(mpz_t, mpz_t, mpz_t) -> ();
-    fn "__gmpz_init"        mpz_init(mpz_t) -> ();
-    fn "__gmpz_init_set_ui" mpz_init_set_ui(mpz_t, u64) -> ();
+    fn "__gmpz_add"         mpz_add(&mpz_t, &mpz_t, &mpz_t) -> ();
+    fn "__gmpz_addmul_ui"   mpz_addmul_ui(&mpz_t, &mpz_t, u64) -> ();
+    fn "__gmpz_submul_ui"   mpz_submul_ui(&mpz_t, &mpz_t, u64) -> ();
+    fn "__gmpz_cmp"         mpz_cmp(&mpz_t, &mpz_t) -> int;
+    fn "__gmpz_get_ui"      mpz_get_ui(&mpz_t) -> u64;
+    fn "__gmpz_mul_ui"      mpz_mul_ui(&mpz_t, &mpz_t, u64) -> ();
+    fn "__gmpz_set_ui"      mpz_set_ui(&mpz_t, u64) -> ();
+    fn "__gmpz_tdiv_q"      mpz_tdiv_q(&mpz_t, &mpz_t, &mpz_t) -> ();
+    fn "__gmpz_init"        mpz_init(&mpz_t) -> ();
+    fn "__gmpz_init_set_ui" mpz_init_set_ui(&mpz_t, u64) -> ();
     fn print_digits(u64) -> ();
     fn putchar(int) -> int;
     fn print_int(int) -> ();
     fn print_char(u8) -> ();
 }
 
-static mut tmp1: mpz_struct;
-static mut tmp2: mpz_struct;
-static mut acc: mpz_struct;
-static mut den: mpz_struct;
-static mut num: mpz_struct;
+static mut tmp1: mpz_t;
+static mut tmp2: mpz_t;
+static mut acc: mpz_t;
+static mut den: mpz_t;
+static mut num: mpz_t;
 
 fn extract_digit(nth: u64 ) -> u64 {
     // joggling between tmp1 and tmp2, so GMP won't have to use temp buffers
