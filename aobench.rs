@@ -202,7 +202,7 @@ fn ambient_occlusion(isect: &IntersectInfo,
             let ray = Ray { origin: ray_origin,
                             direction: direction };
             occ_isect.distance = 1.0e+9;
-            for objects.each |o| {
+            for o in objects.each {
                 if o.intersect(&ray, occ_isect) {
                     occlusion += 1.0;
                     break;
@@ -235,17 +235,17 @@ impl Pixel {
 }
 
 fn render_line(width: uint, height: uint, _y: uint,
-               nsubsamples: uint, objects: &[Object]) -> ~[Pixel] {
+               nsubsamples: uint, objects: &[Object]) -> Vec<Pixel> {
     let mut line = vec::with_capacity(width);
     let sample: f64 = nsubsamples as f64;
     let rng = rand::Rng();
     let w: f64 = width as f64;
     let h: f64 = height as f64;
     let y: f64 = _y as f64;
-    for uint::range(0u, width) |_x| {
+    for _x in uint::range(0u, width) {
         let mut occlusion = 0.0f64;
-        for uint::range(0u, nsubsamples) |_u| {
-            for uint::range(0u, nsubsamples) |_v| {
+        for u in uint::range(0u, nsubsamples) {
+            for v in uint::range(0u, nsubsamples) {
                 let x: f64 = _x as f64;
                 let u: f64 = _u as f64;
                 let v: f64 = _v as f64;
@@ -254,13 +254,13 @@ fn render_line(width: uint, height: uint, _y: uint,
                 let ray = Ray { origin: vector::new(0.0, 0.0, 0.0),
                                 direction: vector::new_normal(px, py, -1.0) };
 
-                let mut isect = ~IntersectInfo {
+                let mut isect = box IntersectInfo {
                     distance: 1.0e+17,
                     position: vector::new(0.0, 0.0, 0.0),
                     normal: vector::new(0.0, 1.0, 0.0)
                 };
                 let mut hit = false;
-                for objects.each |o| {
+                for o in objects.each {
                     let h = o.intersect(&ray, isect);
                     hit = (hit || h);
                 }
@@ -279,9 +279,9 @@ fn render_line(width: uint, height: uint, _y: uint,
     return line;
 }
 
-fn render_singletask(width: uint, height: uint, nsubsamples: uint, objects: ~[Object]) -> ~[Pixel] {
+fn render_singletask(width: uint, height: uint, nsubsamples: uint, objects: Vec<Object>) -> Vec<Pixel> {
     let mut lines = vec::with_capacity(height);
-    for uint::range(0u, height) |y| {
+    for y in uint::range(0u, height) {
         let line = render_line(width, height, y, nsubsamples, objects);
         lines.push(line);
     }
@@ -289,19 +289,19 @@ fn render_singletask(width: uint, height: uint, nsubsamples: uint, objects: ~[Ob
 }
 
 
-type RenderedPixels = (uint, ~[Pixel]);
+type RenderedPixels = (uint, Vec<Pixel>);
 
 struct RenderTask {
     task_id: uint,
     width: uint,
     height: uint,
     nsubsamples: uint,
-    objects: std::arc::ARC<~[Object]>,
+    objects: std::arc::ARC<Vec<Object>>,
     sender: Chan<RenderedPixels>,
     receiver: Port<uint>
 }
 
-fn render_multitask_run(rt: ~RenderTask) {
+fn render_multitask_run(rt: Vec<RenderTask>) {
     println(fmt!(" Task %u: started.", rt.task_id));
     let objects = copy *std::arc::get(&rt.objects);
     loop {
@@ -317,18 +317,18 @@ fn render_multitask_run(rt: ~RenderTask) {
 }
 
 fn render_multitask(width: uint, height: uint, nsubsamples: uint,
-                    num_task: uint, objects: ~[Object]) -> ~[Pixel] {
+                    num_task: uint, objects: Vec<Object>) -> Vec<Pixel> {
     let objects_arc = std::arc::ARC(objects);
-    let mut receivers: ~[Port<RenderedPixels>] = ~[];
-    let mut senders: ~[Chan<uint>] = ~[];
+    let mut receivers = Vec<Port<RenderedPixels>>::new();
+    let mut senders = Vec<Chan<uint>>::new();
 
     println(fmt!("Spawn %u tasks.", num_task));
-    for uint::range(0u, num_task) |i| {
+    for i in uint::range(0u, num_task) {
         let (pixel_receiver, pixel_sender):
             (Port<RenderedPixels>, Chan<RenderedPixels>) = comm::stream();
         let (line_receiver, line_sender):
             (Port<uint>, Chan<uint>) = comm::stream();
-        let rt = ~RenderTask {
+        let rt = box RenderTask {
             task_id: i,
             width: width,
             height: height,
@@ -342,20 +342,20 @@ fn render_multitask(width: uint, height: uint, nsubsamples: uint,
         task::spawn_with(rt, render_multitask_run);
     }
 
-    struct RenderResult { pixels: ~[Pixel] };
-    let mut result_store:~[RenderResult] = vec::with_capacity(height);
-    for uint::range(0u, height) |_| {
-        result_store.push(RenderResult{ pixels: ~[] });
+    struct RenderResult { pixels: Vec<Pixel> };
+    let mut result_store = vec::with_capacity(height);
+    for _ in uint::range(0u, height) {
+        result_store.push(RenderResult{ pixels: Vec<Pixel>::new() });
     }
     // start render
     let mut rendered_line = 0u;
     let mut assigned_line = 0u;
-    for uint::range(0u, num_task) |i| {
+    for i in uint::range(0u, num_task) {
         senders[i].send(assigned_line);
         assigned_line += 1;
     }
     while rendered_line < height {
-        for uint::range(0u, num_task) |i| {
+        for i in uint::range(0u, num_task) {
             match receivers[i].try_recv() {
                 Some((line, pixels)) => {
                     //println(fmt!(" line %u received from Task %u", line, i));
@@ -375,24 +375,26 @@ fn render_multitask(width: uint, height: uint, nsubsamples: uint,
         }
     }
     /* merge result */
-    let mut pixels: ~[Pixel] = ~[];
-    for result_store.each() |t| { pixels.push_all(t.pixels); }
+    let mut pixels = Vec<Pixel>::new();
+    for t in result_store.each() { 
+        pixels.push_all(t.pixels); 
+    }
     return pixels;
 }
 
 fn saveppm(filename: &str, width: uint, height: uint, pixels: &[Pixel]) {
     let writer = result::get(&io::buffered_file_writer(&Path(filename)));
     writer.write_str(fmt!("P6\n%u %u\n255\n", width, height));
-    for pixels.each |pixel| {
+    for pixel in pixels.each {
         writer.write([pixel.r, pixel.g, pixel.b]);
     };
 }
 
 fn main() {
-    let objects = ~[Sphere(vector::new(-2.0, 0.0, -3.5), 0.5),
-                    Sphere(vector::new(-0.5, 0.0, -3.0), 0.5),
-                    Sphere(vector::new( 1.0, 0.0, -2.2), 0.5),
-                    Plane(vector::new(0.0, -0.5, 0.0), vector::new(0.0, 1.0, 0.0))];
+    let objects = vector::new(Sphere(vector::new(-2.0, 0.0, -3.5), 0.5),
+                              Sphere(vector::new(-0.5, 0.0, -3.0), 0.5),
+                              Sphere(vector::new( 1.0, 0.0, -2.2), 0.5),
+                              Plane(vector::new(0.0, -0.5, 0.0), vector::new(0.0, 1.0, 0.0)));
     let width = 256u;
     let height = 256u;
     let mut num_task = 1u;
