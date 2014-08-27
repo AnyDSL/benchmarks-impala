@@ -14,10 +14,11 @@
 #define solar_mass (4 * pi * pi)
 #define year 365.24
 #define for_k for(k = 0; k < 3; k++)
+#define nbodies 5
 
 typedef struct planet { double x[3], v[3], mass; } planet;
 
-void advance(int nbodies, struct planet *bodies, double dt, int steps)
+void advance(struct planet *bodies, double dt, int steps)
 {
    int i, j;
    register planet *a, *b;
@@ -51,7 +52,7 @@ void advance(int nbodies, struct planet *bodies, double dt, int steps)
    }
 }
 
-double energy(int nbodies, planet *bodies)
+double energy(planet *bodies)
 {
    double e, d[3];
    int i, j, k;
@@ -70,7 +71,7 @@ double energy(int nbodies, planet *bodies)
    return e;
 }
 
-void offset_momentum(int nbodies, planet *bodies)
+void offset_momentum(planet *bodies)
 {
    int i, k;
    for (i = 0; i < nbodies; i++)
@@ -117,17 +118,15 @@ struct planet bodies[] = {
    }
 };
 
-#define N sizeof(bodies)/sizeof(planet)
-
 int main(int argc, char **argv)
 {
    int n = atoi(argv[1]);
 
-   offset_momentum(N, bodies);
-   printf("%.9f\n", energy(N, bodies));
+   offset_momentum(bodies);
+   printf("%.9f\n", energy(bodies));
 
-   advance(N, bodies, 0.01, n);
+   advance(bodies, 0.01, n);
 
-   printf("%.9f\n", energy(N, bodies));
+   printf("%.9f\n", energy(bodies));
    return 0;
 }

@@ -50,43 +50,42 @@ fn range(a: int, b: int, body: fn(int, fn())) -> () {
     }
 }
 
-fn advance(nbodies: int, mut bodies: &[planet], dt: f64, mut steps: int) -> () {
-    while steps-- != 0 {
-        for i in range(0, nbodies) {
-            for j in range(i+1, nbodies) {
-                let d0 = bodies(i).x(0) - bodies(j).x(0);
-                let d1 = bodies(i).x(1) - bodies(j).x(1);
-                let d2 = bodies(i).x(2) - bodies(j).x(2);
+fn advance(mut bodies: &[planet], dt: f64) -> () {
+    for i in range(0, N-1) {
+        for j in range(i+1, N) {
+            let d0 = bodies(i).x(0) - bodies(j).x(0);
+            let d1 = bodies(i).x(1) - bodies(j).x(1);
+            let d2 = bodies(i).x(2) - bodies(j).x(2);
 
-                let d = d0*d0 + d1*d1 + d2*d2;
-                let mag = dt / (d * sqrt(d));
+            let d = d0*d0 + d1*d1 + d2*d2;
+            let mag = dt / (d * sqrt(d));
 
-                bodies(i).v(0) -= d0 * bodies(j).mass * mag;
-                bodies(i).v(1) -= d1 * bodies(j).mass * mag;
-                bodies(i).v(2) -= d2 * bodies(j).mass * mag;
+            bodies(i).v(0) -= d0 * bodies(j).mass * mag;
+            bodies(i).v(1) -= d1 * bodies(j).mass * mag;
+            bodies(i).v(2) -= d2 * bodies(j).mass * mag;
 
-                bodies(j).v(0) += d0 * bodies(i).mass * mag;
-                bodies(j).v(1) += d1 * bodies(i).mass * mag;
-                bodies(j).v(2) += d2 * bodies(i).mass * mag;
-            }
+            bodies(j).v(0) += d0 * bodies(i).mass * mag;
+            bodies(j).v(1) += d1 * bodies(i).mass * mag;
+            bodies(j).v(2) += d2 * bodies(i).mass * mag;
         }
+    }
 
-        for i in range(0, nbodies) {
-            bodies(i).x(0) += dt * bodies(i).v(0);
-            bodies(i).x(1) += dt * bodies(i).v(1);
-            bodies(i).x(2) += dt * bodies(i).v(2);
-        }
+    for i in range(0, N) {
+        bodies(i).x(0) += dt * bodies(i).v(0);
+        bodies(i).x(1) += dt * bodies(i).v(1);
+        bodies(i).x(2) += dt * bodies(i).v(2);
     }
 }
 
-fn energy(nbodies: int, bodies: &[planet]) -> f64 {
+fn energy(bodies: &[planet]) -> f64 {
     let mut e = 0.0;
-    for i in range(0, nbodies) {
-        for k in range(0, 3) { 
-            e += bodies(i).mass * bodies(i).v(k) * bodies(i).v(k) / 2.0; 
-        }
+    for i in range(0, N) {
+        e += 0.5 * bodies(i).mass * (
+              bodies(i).v(0) * bodies(i).v(0) 
+            + bodies(i).v(1) * bodies(i).v(1) 
+            + bodies(i).v(2) * bodies(i).v(2));
 
-        for j in range(i+1, nbodies) {
+        for j in range(i+1, N) {
             let d0 = bodies(i).x(0) - bodies(j).x(0);
             let d1 = bodies(i).x(1) - bodies(j).x(1);
             let d2 = bodies(i).x(2) - bodies(j).x(2);
@@ -97,17 +96,19 @@ fn energy(nbodies: int, bodies: &[planet]) -> f64 {
     e
 }
 
-fn offset_momentum(nbodies: int, mut bodies: &[planet]) -> () {
-    for i in range(0, nbodies) {
-        for k in @range(0, 3) {
-            bodies(0).v(k) -= bodies(i).v(k) * bodies(i).mass / solar_mass
-        }
+fn offset_momentum(mut bodies: &[planet]) -> () {
+    for i in range(0, N) {
+        bodies(0).v(0) -= bodies(i).v(0) * bodies(i).mass / solar_mass;
+        bodies(0).v(1) -= bodies(i).v(1) * bodies(i).mass / solar_mass;
+        bodies(0).v(2) -= bodies(i).v(2) * bodies(i).mass / solar_mass;
     }
 }
 
 fn main(n: int) -> () {
-    offset_momentum(N, &bodies);
-    print_f64(energy(N,& bodies));
-    advance(N, &bodies, 0.01, n);
-    print_f64(energy(N, &bodies));
+    offset_momentum(&bodies);
+    print_f64(energy(&bodies));
+    for _ in range(0, n) {
+        advance(&bodies, 0.01);
+    }
+    print_f64(energy(&bodies));
 }
