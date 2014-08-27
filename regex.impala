@@ -1,0 +1,148 @@
+type FILE = &u8;
+
+extern "C" {
+    fn exit(int) -> ();
+    fn realloc(&[u8], u64) -> &[u8];
+    fn get_stdin() -> FILE;
+    fn print_num_matches(&[u8], int) -> ();
+    fn fread(&u8, u64, u64, FILE) -> u64;
+    fn ferror(FILE) -> bool;
+}
+
+struct fbuf_t {
+    buf:  &[u8],
+    size: u64,
+    len:  u64,
+}
+
+fn range(a: int, b: int, body: fn(int, fn())) -> () {
+    if a < b {
+        body(a);
+        range(a+1, b, body, return)
+    }
+}
+
+static nullptr = 0 as &[u8];
+
+fn fb_need(mut b: &fbuf_t, mut need: u64) -> &u8 {
+    need += b.len;
+    if need > b.size {
+        if b.size == 0_u64 {
+            b.size = need;
+        } else {
+            while need > b.size {
+                b.size += b.size;
+            }
+        }
+        b.buf = realloc(b.buf, b.size);
+        if b.buf == nullptr {
+            exit(1);
+        }
+    }
+    &b.buf(b.len)
+}
+
+static FB_MINREAD = 3_u64 << 16_u64;
+
+// Read all of a stdio stream into dst buffer.
+fn fb_readall(mut dst: &fbuf_t, f: FILE) -> u64 {
+    let mut dp = fb_need(dst, FB_MINREAD);
+    while true {
+        let n = fread(dp, 1_u64, dst.size-dst.len, f);
+        if n == 0_u64 {
+            break()
+        }
+
+        dp = fb_need(dst, FB_MINREAD);
+        dst.len += n;
+    }
+    dst.len
+}
+
+// Substitute pattern p with replacement r, copying from src to dst buffer.
+fn fb_subst(dst: &fbuf_t, src: &fbuf_t, p: &[u8], r: &[u8]) -> u64 {
+/*
+  pcre *re;
+  pcre_extra *re_ex;
+  const char *re_e;
+  char *dp;
+  int re_eo, m[3], pos, rlen, clen;
+  if (!(re = pcre_compile(p, PCRE_CASELESS, &re_e, &re_eo, NULL))) exit(1);
+  re_ex = pcre_study(re, 0, &re_e);
+  for (dst.len = 0, rlen = strlen(r), pos = 0;
+       pcre_exec(re, re_ex, src.buf, src.len, pos, 0, m, 3) >= 0;
+       pos = m[1]) {
+    clen = m[0]-pos;
+    dp = fb_need(dst, clen+rlen);
+    dst.len += clen+rlen;
+    memcpy(dp, src.buf+pos, clen);
+    memcpy(dp+clen, r, rlen);
+  }
+  clen = src.len-pos;
+  dp = fb_need(dst, clen);
+  dst.len += clen;
+  memcpy(dp, src.buf+pos, clen);
+  return dst.len;
+  */
+    42_u64
+}
+
+
+// Count all matches with pattern p in src buffer.
+fn fb_countmatches(src: &fbuf_t, p: &[u8]) -> int {
+/*
+  pcre *re;
+  pcre_extra *re_ex;
+  const char *re_e;
+  int re_eo, m[3], pos, count;
+  if (!(re = pcre_compile(p, PCRE_CASELESS, &re_e, &re_eo, NULL))) exit(1);
+  re_ex = pcre_study(re, 0, &re_e);
+  for (count = 0, pos = 0;
+       pcre_exec(re, re_ex, src.buf, src.len, pos, 0, m, 3) >= 0;
+       pos = m[1]) count++;
+  return count;
+*/
+    42
+}
+
+
+static mut v0 = "agggtaaa|tttaccct";
+static mut v1 = "[cgt]gggtaaa|tttaccc[acg]";
+static mut v2 = "a[act]ggtaaa|tttacc[agt]t";
+static mut v3 = "ag[act]gtaaa|tttac[agt]ct";
+static mut v4 = "agg[act]taaa|ttta[agt]cct";
+static mut v5 = "aggg[acg]aaa|ttt[cgt]ccct";
+static mut v6 = "agggt[cgt]aa|tt[acg]accct";
+static mut v7 = "agggta[cgt]a|t[acg]taccct";
+static mut v8 = "agggtaa[cgt]|[acg]ttaccct";
+static NUM_VARIANTS = 9;
+
+/*
+static NUM_SUBST = 11;
+static subst = [
+  "B", "(c|g|t)", "D", "(a|g|t)",   "H", "(a|c|t)", "K", "(g|t)",
+  "M", "(a|c)",   "N", "(a|c|g|t)", "R", "(a|g)",   "S", "(c|g)",
+  "V", "(a|c|g)", "W", "(a|t)",     "Y", "(c|t)"
+];
+*/
+
+fn take_address(a: &[&[u8]]) -> () {}
+
+fn main() -> () {
+    let mut seq = [
+        fbuf_t{buf: nullptr, size: 0_u64, len: 0_u64},
+        fbuf_t{buf: nullptr, size: 0_u64, len: 0_u64}
+    ];
+    let mut variants: [&[u8] * 9] = [(&v0) as &[u8], &v1, &v2, &v3, &v4, &v5, &v6, &v7, &v8];
+    take_address(&variants);
+
+    let ilen = fb_readall(&seq(0), get_stdin());
+    let clen = fb_subst(&seq(1), &seq(0), ">.*|\n", "");
+
+    for i in range(0, NUM_VARIANTS) {
+        print_num_matches(variants(i), fb_countmatches(&seq(1), variants(i)));
+    }
+    //for (slen = 0, flip = 1, pp = subst; *pp; pp += 2, flip = 1-flip)
+        //slen = fb_subst(&seq[1-flip], &seq[flip], *pp, pp[1]);
+    //printf("\n%zu\n%zu\n%zu\n", ilen, clen, slen);
+}

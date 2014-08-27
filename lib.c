@@ -60,3 +60,11 @@ void write(const char* line, size_t size) {
 void println(const char* s) {
     printf("%s\n", s);
 }
+
+FILE* get_stdin() {
+    return stdin;
+}
+
+void print_num_matches(const char* s, int count) {
+    printf("%s %d\n", s, count);
+}
