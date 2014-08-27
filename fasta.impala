@@ -156,6 +156,8 @@ fn generate_And_Wrap_Pseudorandom_DNA_Sequence(
 
 fn main() -> () {
     static n = 25000000;
+
+    print(">ONE Homo sapiens alu\n");
     let mut homo_Sapiens_Alu =
         "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCGGATCACCTGAGGTC"
         "AGGAGTTCGAGACCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAATACAAAAATTAGCCGGGCG"
