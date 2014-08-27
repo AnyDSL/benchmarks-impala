@@ -2,12 +2,12 @@
 
 clang -O2 lib.c -c
 
-for F in fannkuch fasta mandelbrot meteor nbody spectral regex
+for F in fannkuch fasta mandelbrot meteor nbody pidigits spectral regex
 do
     echo ">>> building ${F}_c.out"
-    clang -O2 -std=c99 ${F}.c -o ${F}_c.out -lm -lpcre -s
+    clang -O2 -std=c99 ${F}.c -o ${F}_c.out -lm -lpcre -lgmp -s
 
     echo ">>> building ${F}_impala.out"
     impala ${F}.impala -emit-llvm
-    clang -O2 lib.o ${F}.bc -lm -lpcre -s -o ${F}_impala.out
+    clang -O2 lib.o ${F}.bc -lm -lpcre -lgmp -s -o ${F}_impala.out
 done

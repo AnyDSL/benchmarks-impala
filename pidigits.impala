@@ -7,16 +7,16 @@ struct mpz_struct {
 type mpz_t = &mpz_struct;
 
 extern "C" {
-    fn __gmpz_add(mpz_t, mpz_t, mpz_t) -> ();
-    fn __gmpz_addmul_ui(mpz_t, mpz_t, u64) -> ();
-    fn __gmpz_submul_ui(mpz_t, mpz_t, u64) -> ();
-    fn __gmpz_cmp(mpz_t, mpz_t) -> int;
-    fn __gmpz_get_ui(mpz_t) -> u64;
-    fn __gmpz_mul_ui(mpz_t, mpz_t, u64) -> ();
-    fn __gmpz_set_ui(mpz_t, u64) -> ();
-    fn __gmpz_tdiv_q(mpz_t, mpz_t, mpz_t) -> ();
-    fn __gmpz_init(mpz_t) -> ();
-    fn __gmpz_init_set_ui(mpz_t, u64) -> ();
+    fn "__gmpz_add"         mpz_add(mpz_t, mpz_t, mpz_t) -> ();
+    fn "__gmpz_addmul_ui"   mpz_addmul_ui(mpz_t, mpz_t, u64) -> ();
+    fn "__gmpz_submul_ui"   mpz_submul_ui(mpz_t, mpz_t, u64) -> ();
+    fn "__gmpz_cmp"         mpz_cmp(mpz_t, mpz_t) -> int;
+    fn "__gmpz_get_ui"      mpz_get_ui(mpz_t) -> u64;
+    fn "__gmpz_mul_ui"      mpz_mul_ui(mpz_t, mpz_t, u64) -> ();
+    fn "__gmpz_set_ui"      mpz_set_ui(mpz_t, u64) -> ();
+    fn "__gmpz_tdiv_q"      mpz_tdiv_q(mpz_t, mpz_t, mpz_t) -> ();
+    fn "__gmpz_init"        mpz_init(mpz_t) -> ();
+    fn "__gmpz_init_set_ui" mpz_init_set_ui(mpz_t, u64) -> ();
     fn print_digits(u64) -> ();
     fn putchar(int) -> int;
     fn print_int(int) -> ();
@@ -31,42 +31,42 @@ static mut num: mpz_struct;
 
 fn extract_digit(nth: u64 ) -> u64 {
     // joggling between tmp1 and tmp2, so GMP won't have to use temp buffers
-    __gmpz_mul_ui(&tmp1, &num, nth);
-    __gmpz_add(&tmp2, &tmp1, &acc);
-    __gmpz_tdiv_q(&tmp1, &tmp2, &den);
-    __gmpz_get_ui(&tmp1)
+    mpz_mul_ui(&tmp1, &num, nth);
+    mpz_add(&tmp2, &tmp1, &acc);
+    mpz_tdiv_q(&tmp1, &tmp2, &den);
+    mpz_get_ui(&tmp1)
 }
 
 fn eliminate_digit(d: u64) -> () {
-    __gmpz_submul_ui(&acc, &den, d);
-    __gmpz_mul_ui(&acc, &acc, 10_u64);
-    __gmpz_mul_ui(&num, &num, 10_u64);
+    mpz_submul_ui(&acc, &den, d);
+    mpz_mul_ui(&acc, &acc, 10_u64);
+    mpz_mul_ui(&num, &num, 10_u64);
 }
 
 fn next_term(k: u64) -> () {
     let k2 = k * 2_u64 + 1_u64;
 
-    __gmpz_addmul_ui(&acc, &num, 2_u64);
-    __gmpz_mul_ui(&acc, &acc, k2);
-    __gmpz_mul_ui(&den, &den, k2);
-    __gmpz_mul_ui(&num, &num, k);
+    mpz_addmul_ui(&acc, &num, 2_u64);
+    mpz_mul_ui(&acc, &acc, k2);
+    mpz_mul_ui(&den, &den, k2);
+    mpz_mul_ui(&num, &num, k);
 }
 
 fn main() -> () {
     let n = 10000_u64;
 
-    __gmpz_init(&tmp1);
-    __gmpz_init(&tmp2);
+    mpz_init(&tmp1);
+    mpz_init(&tmp2);
 
-    __gmpz_init_set_ui(&acc, 0_u64);
-    __gmpz_init_set_ui(&den, 1_u64);
-    __gmpz_init_set_ui(&num, 1_u64);
+    mpz_init_set_ui(&acc, 0_u64);
+    mpz_init_set_ui(&den, 1_u64);
+    mpz_init_set_ui(&num, 1_u64);
 
     let mut k = 0_u64;
     let mut i = 0_u64;
     while i < n {
         next_term(++k);
-        if __gmpz_cmp(&num, &acc) > 0 {
+        if mpz_cmp(&num, &acc) > 0 {
             continue()
         }
 
