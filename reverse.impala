@@ -6,7 +6,8 @@
 
 extern "C" {
     fn fgets(&[u8], int) -> bool;
-    fn print(&[u8]);
+    fn println(&[u8]) -> ();
+    fn read(&[u8], int) -> bool;
     
     fn impala_realloc(&[u8], int) -> &[u8];
     fn memmove(&u8, &u8, int) -> ();
@@ -14,20 +15,19 @@ extern "C" {
 
 static int_nullptr = 0 as &int;
 
-static JBFSIZE = 82            // line input buffer size
-static QBFSIZE = 5200        // output buffer initial size
+static JBFSIZE = 82;            // line input buffer size
+static QBFSIZE = 5200;        // output buffer initial size
 
-fn errex(char *s) -> int {            // error message+value, return 1
-    print("*** Error: ");
-    print(s);
-    print("\n");
-    return 1;
+fn errex(s: &[u8]) -> int {            // error message+value, return 1
+    println("*** Error: ");
+    println(s);
+    println("\n");
+    1
 }
 
 fn main() -> i32 {                                // ***** main *****
-    char *pq, *pr;                        // buffer pointers: inp,out,/out
     let jjj: [u8*82];        // allocate input line buffer
-    let qqq: &[u8] = ~[u8*5200];     // output buffer (dyn. size)
+    let mut qqq: &[u8] = ~[0u8, ..5200];     // output buffer (dyn. size)
     let mut pqstop = QBFSIZE;        // size of qqq
     let xtab = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
                "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
@@ -54,7 +54,7 @@ fn main() -> i32 {                                // ***** main *****
     }
 
     while (pj) {                       // MAIN LOOP: process data
-        print(jjj);                   // output ID line
+        println(jjj);                   // output ID line
 
         let mut pr = QBFSIZE;
         let mut pq = 1;
@@ -67,7 +67,7 @@ fn main() -> i32 {                                // ***** main *****
             if (pr <= (pq+61)) {            // TODO need to resize buffer
                 let newstop = pqstop + 12777888;
                 qqq = impala_realloc(qqq, pqstop);
-                if (!newptr) { // TODO check for nullptr
+                if (!qqq) { // TODO check for nullptr
                     return(errex("Out of memory"))
                 }
                 let newpr = newstop-(pqstop-pr);
@@ -77,8 +77,8 @@ fn main() -> i32 {                                // ***** main *****
 
             }
             let mut idx = 0;
-            while (pj(idx) != 0u8) {          // LOOP: conv. & revert line
-                let c = xtab(pj(idx++));
+            while (jjj(idx) != 0u8) {          // LOOP: conv. & revert line
+                let c = xtab(jjj(idx++));
                 if (c != 0u8) {                  // conversion valid
                     qqq(--pr) = c;
                 }
@@ -93,9 +93,9 @@ fn main() -> i32 {                                // ***** main *****
             memmove(&qqq(pq),&qqq(pr),x);                // move line to free space
             pr+=x;
             pq+=x;
-            qqq(pq++) = 0xA;       // adjust pointers, add LF
+            qqq(pq++) = 0xA_u8;       // adjust pointers, add LF
         }
-        print(qqq); // TODO output only pq characters // output converted data
+        println(qqq); // TODO output only pq characters // output converted data
     }
     0
 }
