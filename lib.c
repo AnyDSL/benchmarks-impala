@@ -85,3 +85,16 @@ void saveppm(const char *fname, int w, int h, unsigned char *img) {
     fclose(fp);
 }
 
+// reverse
+int read(const char* s, int bufsize) {
+    return (fgets(s, bufsize, stdin)) ? 1 else 0;
+}
+
+void* impala_realloc(void* ptr, int size) {
+    return realloc(ptr, size)
+}
+
+void memmove(const char* dest, const char* src, int size) {
+    __builtin_memmove(dest, src, size);
+}
+
