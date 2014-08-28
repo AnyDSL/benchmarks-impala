@@ -8,19 +8,6 @@ extern "C" {
     fn saveppm(&[u8], int, int, &[u8]) -> ();
 }
 
-struct Imgf64 {
-    data: &[f64],
-    width: int,
-    height: int,
-    stride: int,
-}
-struct Imgu8 {
-    data: &[u8],
-    width: int,
-    height: int,
-    stride: int,
-}
-
 struct vec {
     x: f64,
     y: f64,
@@ -62,14 +49,6 @@ fn range(a: int, b: int, body: fn(int, fn())) -> () {
     if a < b {
         body(a);
         range(a+1, b, body, return)
-    }
-}
-
-fn iteration(arr: Imgf64, out: Imgu8, body: fn(int, int, Imgf64, Imgu8) -> ()) -> () {
-    for y in range(0, out.height) {
-        for x in range(0, out.width) {
-            body(x, y, arr, out);
-        }
     }
 }
 
@@ -229,54 +208,52 @@ fn clamp(f: f64) -> u8 {
     i as u8
 }
 
-fn render(img_data: &[u8], w: int, h: int, nsubsamples: int) -> () {
-    let fimg_data = ~[w*h*3:f64];
-    memset(fimg_data as &i8, 0, (w*h*3*8) as u64);
+fn render(mut img: &[u8], w: int, h: int, nsubsamples: int) -> () {
+    let mut fimg = ~[w*h*3:f64];
+    memset(fimg as &i8, 0, (w*h*3*8) as u64);
 
-    let fimg = Imgf64 { data: fimg_data, width: w, height: h, stride: w };
-    let  img = Imgu8  { data: img_data,  width: w, height: h, stride: w };
+    for y in range(0, h) {
+        for x in range(0, w) {
+            for v in range(0, nsubsamples) {
+                for u in range(0, nsubsamples) {
+                    let px =  (x as f64 + (u as f64 / (nsubsamples as f64)) - (w as f64 / 2.0)) / (w as f64 / 2.0);
+                    let py = -(y as f64 + (v as f64 / (nsubsamples as f64)) - (h as f64 / 2.0)) / (h as f64 / 2.0);
 
-    for x, y, mut fimg, mut img in iteration(fimg, img) {
-        for v in range(0, nsubsamples) {
-            for u in range(0, nsubsamples) {
-                let px =  (x as f64 + (u as f64 / (nsubsamples as f64)) - (w as f64 / 2.0)) / (w as f64 / 2.0);
-                let py = -(y as f64 + (v as f64 / (nsubsamples as f64)) - (h as f64 / 2.0)) / (h as f64 / 2.0);
+                    let mut ray = Ray {
+                        org: vec { x: 0.0, y: 0.0, z: 0.0 },
+                        dir: vec { x: px,  y: py,  z: -1.0 }
+                    };
 
-                let mut ray = Ray {
-                    org: vec { x: 0.0, y: 0.0, z: 0.0 },
-                    dir: vec { x: px,  y: py,  z: -1.0 }
-                };
+                    vnormalize(&(ray.dir));
 
-                vnormalize(&(ray.dir));
+                    let mut isect: Isect;
+                    isect.t   = 1.0e+17;
+                    isect.hit = 0;
 
-                let mut isect: Isect;
-                isect.t   = 1.0e+17;
-                isect.hit = 0;
+                    ray_sphere_intersect(&isect, &ray, &spheres(0));
+                    ray_sphere_intersect(&isect, &ray, &spheres(1));
+                    ray_sphere_intersect(&isect, &ray, &spheres(2));
+                    ray_plane_intersect (&isect, &ray, &plane);
 
-                ray_sphere_intersect(&isect, &ray, &spheres(0));
-                ray_sphere_intersect(&isect, &ray, &spheres(1));
-                ray_sphere_intersect(&isect, &ray, &spheres(2));
-                ray_plane_intersect (&isect, &ray, &plane);
+                    if isect.hit == 1 {
+                        let mut col: vec;
+                        ambient_occlusion(&col, &isect);
 
-                if isect.hit == 1 {
-                    let mut col: vec;
-                    ambient_occlusion(&col, &isect);
-
-                    fimg.data(3 * (y * w + x) + 0) += col.x;
-                    fimg.data(3 * (y * w + x) + 1) += col.y;
-                    fimg.data(3 * (y * w + x) + 2) += col.z;
+                        fimg(3 * (y * w + x) + 0) += col.x;
+                        fimg(3 * (y * w + x) + 1) += col.y;
+                        fimg(3 * (y * w + x) + 2) += col.z;
+                    }
                 }
-
             }
+
+            fimg(3 * (y * w + x) + 0) /= (nsubsamples * nsubsamples) as f64;
+            fimg(3 * (y * w + x) + 1) /= (nsubsamples * nsubsamples) as f64;
+            fimg(3 * (y * w + x) + 2) /= (nsubsamples * nsubsamples) as f64;
+
+            img(3 * (y * w + x) + 0) = clamp(fimg(3 *(y * w + x) + 0));
+            img(3 * (y * w + x) + 1) = clamp(fimg(3 *(y * w + x) + 1));
+            img(3 * (y * w + x) + 2) = clamp(fimg(3 *(y * w + x) + 2));
         }
-
-        fimg.data(3 * (y * w + x) + 0) /= (nsubsamples * nsubsamples) as f64;
-        fimg.data(3 * (y * w + x) + 1) /= (nsubsamples * nsubsamples) as f64;
-        fimg.data(3 * (y * w + x) + 2) /= (nsubsamples * nsubsamples) as f64;
-
-        img.data(3 * (y * w + x) + 0) = clamp(fimg.data(3 *(y * w + x) + 0));
-        img.data(3 * (y * w + x) + 1) = clamp(fimg.data(3 *(y * w + x) + 1));
-        img.data(3 * (y * w + x) + 2) = clamp(fimg.data(3 *(y * w + x) + 2));
     }
 }
 
