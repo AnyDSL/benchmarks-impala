@@ -1,6 +1,4 @@
-module Main () where
-
-import System (getArgs)
+import System.Environment (getArgs)
 import System.IO (withBinaryFile, IOMode(..), hPutStrLn)
 import System.Random.Mersenne
 import Data.Maybe (catMaybes, listToMaybe)
