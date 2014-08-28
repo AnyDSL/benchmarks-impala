@@ -60,6 +60,14 @@ void write(const char* line, size_t size) {
     fwrite(line, size, 1, stdout);
 }
 
+void print(const char* s) {
+    printf("%s", s);
+}
+
+void printn(const char* s, int n) {
+    fwrite(s, 1, n, stdout);
+}
+
 void println(const char* s) {
     printf("%s\n", s);
 }
