@@ -25,6 +25,11 @@ do
     #echo ">>> building ${F}_rs.out"
     #rustc --opt-level 3 ${F}.rs -o ${F}_rs.out
 
-    #echo ">>> building ${F}_hs.out"
-    #ghc --make -fllvm -O3 -XBangPatterns -rtsopts -XOverloadedStrings ${F}.hs -o ${F}_hs.out
+    echo ">>> building ${F}_hs.out"
+    if [ "${F}" == "fasta" ]
+    then
+        ghc --make -fllvm -O3 -XBangPatterns -rtsopts -XOverloadedStrings ${F}.hs -o ${F}_hs.out
+    else
+        ghc --make -fllvm -O3 -XBangPatterns -rtsopts -funfolding-use-threshold=32 -XMagicHash -XUnboxedTuples ${F}.hs -o ${F}_hs.out
+    fi
 done
