@@ -9,7 +9,7 @@ do
 
     echo ">>> building ${F}_impala.out"
     impala ${F}.impala -emit-llvm
-    clang -O3 lib.o ${F}.bc -lm -lpcre -lgmp -s -o ${F}_impala.out
+    clang -O3 lib.o ${F}.bc -lm -lpcre -lgmp -o ${F}_impala.out
 
     #echo ">>> building ${F}_rs.out"
     #rustc --opt-level 3 ${F}.rs -o ${F}_rs.out
