@@ -7,54 +7,59 @@
 extern "C" {
     fn fgets(&[u8], int) -> bool;
     fn println(&[u8]) -> ();
+    fn print_int(int) -> ();
     fn read(&[u8], int) -> bool;
     
-    fn impala_realloc(&[u8], int) -> &[u8];
+    fn impala_realloc(~[u8], int) -> ~[u8];
     fn impala_memmove(&u8, &u8, int) -> ();
 }
 
-static nullptr = 0 as &[u8];
+static nullptr = 0 as ~[u8];
 
 static JBFSIZE = 82;            // line input buffer size
 static QBFSIZE = 5200;        // output buffer initial size
 
-fn errex(s: &[u8]) -> int {            // error message+value, return 1
+fn errex(s: &[u8]) -> () {            // error message+value, return 1
     println("*** Error: ");
     println(s);
     println("\n");
-    1
 }
 
-fn main() -> i32 {                                // ***** main *****
+fn take_address(&[u8]) -> () {}
+
+fn main(n: int) -> () {                                // ***** main *****
     let mut jjj: [u8*82];        // allocate input line buffer
-    let mut qqq: &[u8] = ~[0u8, ..5200];     // output buffer (dyn. size)
+    let mut qqq = ~[5200: u8];   // output buffer (dyn. size)
     let mut pqstop = QBFSIZE;        // size of qqq
-    let xtab = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0TVGH\0\0CD\0\0M\0KN\0\0\0YSA\0BW\0R\0\0\0\0\0\0"
-               "\0TVGH\0\0CD\0\0M\0KN\0\0\0YSA\0BW\0R\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-               "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"; // char conversion table
+    let mut xtab = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0TVGH\0\0CD\0\0M\0KN\0\0\0YSA\0BW\0R\0\0\0\0\0\0"
+                   "\0TVGH\0\0CD\0\0M\0KN\0\0\0YSA\0BW\0R\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"; // char conversion table
+    take_address(&xtab);
     
     let mut pj = read(&jjj, JBFSIZE);                 // fetch 1st line
 
     if (!pj) {
-        return(errex("No input data"))
+        errex("No input data");
+        return()
     }
     if (jjj(0) != '>') {
-        return(errex("1st char not '>'"))
+        errex("1st char not '>'");
+        return()
     }
 
-    while (pj) {                       // MAIN LOOP: process data
-        println(&jjj);                   // output ID line
+    while pj {                       // MAIN LOOP: process data
+        //println(&jjj);                   // output ID line
 
         let mut pr = QBFSIZE;
         let mut pq = 1;
@@ -66,14 +71,18 @@ fn main() -> i32 {                                // ***** main *****
             }
             if (pr <= (pq+61)) {            // resize buffer
                 let newstop = pqstop + 12777888;
-                qqq = impala_realloc(qqq, pqstop);
-                if (qqq == nullptr) { // TODO check for nullptr
-                    return(errex("Out of memory"))
+                //print_int(newstop);
+                qqq = impala_realloc(qqq, newstop);
+                if (qqq == nullptr) {
+                    errex("Out of memory");
+                    return()
                 }
                 let newpr = newstop-(pqstop-pr);
                 impala_memmove(&qqq(newpr), &qqq(pr), pqstop-pr);
                 pr = newpr;
                 pqstop = newstop;            // buffer resize complete
+            println("move");
+            print_int(pr);
 
             }
             let mut idx = 0;
@@ -81,6 +90,8 @@ fn main() -> i32 {                                // ***** main *****
                 let c = xtab(jjj(idx++));
                 if (c != 0u8) {                  // conversion valid
                     qqq(--pr) = c;
+            println("dec");
+            print_int(pr);
                 }
             }
             
@@ -94,8 +105,9 @@ fn main() -> i32 {                                // ***** main *****
             pr+=x;
             pq+=x;
             qqq(pq++) = 0xA_u8;       // adjust pointers, add LF
+            println("inc");
+            print_int(pr);
         }
-        println(qqq); // TODO output only pq characters // output converted data
+        //println(qqq); // TODO output only pq characters // output converted data
     }
-    0
 }

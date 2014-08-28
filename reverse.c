@@ -34,7 +34,7 @@ int main () {                    // ***** main *****
     return errex("1st char not '>'", 0);
 
   while (pj) {                           // MAIN LOOP: process data
-    fputs(jjj, stdout);                  // output ID line
+    //fputs(jjj, stdout);                  // output ID line
 
     for (pq=qqq+1, pr=pqstop; ; pq++) {  // LOOP: fill output buffer
       pj = fgets(jjj, JBFSIZE, stdin);   // get line from stdin
@@ -48,15 +48,23 @@ int main () {                    // ***** main *****
           size_t x = newptr-qqq;         // offset for pointer update
           pq+=x;  pr+=x;  qqq+=x;
           newstop+=x;  pqstop+=x;
+
+      //printf("%s\n", "body");
+        //printf("%i\n", (int)(pr-qqq));
         }
         pr = __builtin_memmove(newstop-(pqstop-pr), pr, pqstop-pr);
+      printf("%s\n", "move");
+        printf("%i\n", (int)(pr-qqq));
         pqstop = newstop;                // buffer resize complete
 
       }
       while (*pj) {                      // LOOP: conv. & revert line
         char c = xtab[(unsigned char)(*pj++)];
-        if (c)                           // conversion valid
+        if (c) {                         // conversion valid
           *(--pr) = c;
+      printf("%s\n", "dec");
+        printf("%i\n", (int)(pr-qqq));
+        }
       }
     }
 
@@ -64,8 +72,10 @@ int main () {                    // ***** main *****
       size_t x = (pqstop-pr)<60 ? pqstop-pr : 60;
       __builtin_memmove(pq,pr,x);        // move line to free space
       pr+=x;  pq+=x;  *(pq++) = 0xA;     // adjust pointers, add LF
+      printf("%s\n", "inc");
+        printf("%i\n", (int)(pr-qqq));
     }
-    fwrite(qqq, 1, pq-qqq, stdout);      // output converted data
+    //fwrite(qqq, 1, pq-qqq, stdout);      // output converted data
   }
   return 0;
 }
