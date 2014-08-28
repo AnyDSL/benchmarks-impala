@@ -19,7 +19,7 @@ do
     clang -O3 -std=gnu99 ${INC_FLAGS} ${F}.c -o ${F}_c.out ${LD_FLAGS} -lm -lpcre -lgmp -s
 
     echo ">>> building ${F}_impala.out"
-    impala ${F}.impala -emit-llvm
+    impala ${F}.impala -emit-llvm -O3
     clang -O3 -flto lib.o ${F}.ll ${LD_FLAGS} -lm -lpcre -lgmp -s -o ${F}_impala.out
 
     #echo ">>> building ${F}_rs.out"
