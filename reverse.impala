@@ -10,7 +10,7 @@ extern "C" {
     fn read(&[u8], int) -> bool;
     
     fn impala_realloc(&[u8], int) -> &[u8];
-    fn memmove(&u8, &u8, int) -> ();
+    fn impala_memmove(&u8, &u8, int) -> ();
 }
 
 static int_nullptr = 0 as &int;
