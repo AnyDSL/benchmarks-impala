@@ -13,7 +13,7 @@ case $OSTYPE in
         ;;
 esac
 
-for F in aobench fannkuch fasta mandelbrot meteor nbody pidigits spectral regex
+for F in aobench fannkuch fasta mandelbrot meteor nbody pidigits spectral regex reverse
 do
     echo ">>> building ${F}_c.out"
     clang -O3 -std=gnu99 ${INC_FLAGS} ${F}.c -o ${F}_c.out ${LD_FLAGS} -lm -lpcre -lgmp

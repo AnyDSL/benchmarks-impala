@@ -13,7 +13,7 @@ extern "C" {
     fn impala_memmove(&u8, &u8, int) -> ();
 }
 
-static int_nullptr = 0 as &int;
+static nullptr = 0 as &[u8];
 
 static JBFSIZE = 82;            // line input buffer size
 static QBFSIZE = 5200;        // output buffer initial size
@@ -26,7 +26,7 @@ fn errex(s: &[u8]) -> int {            // error message+value, return 1
 }
 
 fn main() -> i32 {                                // ***** main *****
-    let jjj: [u8*82];        // allocate input line buffer
+    let mut jjj: [u8*82];        // allocate input line buffer
     let mut qqq: &[u8] = ~[0u8, ..5200];     // output buffer (dyn. size)
     let mut pqstop = QBFSIZE;        // size of qqq
     let xtab = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
@@ -44,7 +44,7 @@ fn main() -> i32 {                                // ***** main *****
                "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
                "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"; // char conversion table
     
-    let mut pj = read(jjj, JBFSIZE);                 // fetch 1st line
+    let mut pj = read(&jjj, JBFSIZE);                 // fetch 1st line
 
     if (!pj) {
         return(errex("No input data"))
@@ -54,24 +54,24 @@ fn main() -> i32 {                                // ***** main *****
     }
 
     while (pj) {                       // MAIN LOOP: process data
-        println(jjj);                   // output ID line
+        println(&jjj);                   // output ID line
 
         let mut pr = QBFSIZE;
         let mut pq = 1;
         
         while true {                    // LOOP: fill output buffer
-            pj = read(jjj, JBFSIZE);     // get line from stdin
+            pj = read(&jjj, JBFSIZE);     // get line from stdin
             if (!pj || (jjj(0) == '>')) {
                 break()       // EOF or new ID line
             }
-            if (pr <= (pq+61)) {            // TODO need to resize buffer
+            if (pr <= (pq+61)) {            // resize buffer
                 let newstop = pqstop + 12777888;
                 qqq = impala_realloc(qqq, pqstop);
-                if (!qqq) { // TODO check for nullptr
+                if (qqq == nullptr) { // TODO check for nullptr
                     return(errex("Out of memory"))
                 }
                 let newpr = newstop-(pqstop-pr);
-                memmove(&qqq(newpr), &qqq(pr), pqstop-pr);
+                impala_memmove(&qqq(newpr), &qqq(pr), pqstop-pr);
                 pr = newpr;
                 pqstop = newstop;            // buffer resize complete
 
@@ -90,7 +90,7 @@ fn main() -> i32 {                                // ***** main *****
         pq = 0;
         while pr < pqstop {
             let x = if (pqstop-pr) < 60 { pqstop-pr } else { 60 };
-            memmove(&qqq(pq),&qqq(pr),x);                // move line to free space
+            impala_memmove(&qqq(pq),&qqq(pr),x);                // move line to free space
             pr+=x;
             pq+=x;
             qqq(pq++) = 0xA_u8;       // adjust pointers, add LF
