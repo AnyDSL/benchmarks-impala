@@ -6,6 +6,7 @@
 
 extern "C" {
     fn fgets(&[u8], int) -> bool;
+    fn print2(&[u8], int) -> ();
     fn println(&[u8]) -> ();
     fn print_int(int) -> ();
     fn read(&[u8], int) -> bool;
@@ -81,8 +82,7 @@ fn main(n: int) -> () {                                // ***** main *****
                 impala_memmove(&qqq(newpr), &qqq(pr), pqstop-pr);
                 pr = newpr;
                 pqstop = newstop;            // buffer resize complete
-            println("move");
-            print_int(pr);
+            print2("move", pr);
 
             }
             let mut idx = 0;
@@ -90,8 +90,7 @@ fn main(n: int) -> () {                                // ***** main *****
                 let c = xtab(jjj(idx++));
                 if (c != 0u8) {                  // conversion valid
                     qqq(--pr) = c;
-            println("dec");
-            print_int(pr);
+            print2("dec", pr);
                 }
             }
             
@@ -105,8 +104,7 @@ fn main(n: int) -> () {                                // ***** main *****
             pr+=x;
             pq+=x;
             qqq(pq++) = 0xA_u8;       // adjust pointers, add LF
-            println("inc");
-            print_int(pr);
+            print2("inc", pr);
         }
         //println(qqq); // TODO output only pq characters // output converted data
     }

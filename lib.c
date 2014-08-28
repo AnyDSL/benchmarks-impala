@@ -98,3 +98,7 @@ void impala_memmove(char* dest, const char* src, int size) {
     __builtin_memmove(dest, src, size);
 }
 
+void print2(const char* s, int i) {
+    printf("%s: %i\n", s, i);
+}
+

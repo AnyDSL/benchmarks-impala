@@ -53,8 +53,7 @@ int main () {                    // ***** main *****
         //printf("%i\n", (int)(pr-qqq));
         }
         pr = __builtin_memmove(newstop-(pqstop-pr), pr, pqstop-pr);
-      printf("%s\n", "move");
-        printf("%i\n", (int)(pr-qqq));
+        printf("move: %i\n", (int)(pr-qqq));
         pqstop = newstop;                // buffer resize complete
 
       }
@@ -62,8 +61,7 @@ int main () {                    // ***** main *****
         char c = xtab[(unsigned char)(*pj++)];
         if (c) {                         // conversion valid
           *(--pr) = c;
-      printf("%s\n", "dec");
-        printf("%i\n", (int)(pr-qqq));
+        printf("dec: %i\n", (int)(pr-qqq));
         }
       }
     }
@@ -72,8 +70,7 @@ int main () {                    // ***** main *****
       size_t x = (pqstop-pr)<60 ? pqstop-pr : 60;
       __builtin_memmove(pq,pr,x);        // move line to free space
       pr+=x;  pq+=x;  *(pq++) = 0xA;     // adjust pointers, add LF
-      printf("%s\n", "inc");
-        printf("%i\n", (int)(pr-qqq));
+        printf("inc: %i\n", (int)(pr-qqq));
     }
     //fwrite(qqq, 1, pq-qqq, stdout);      // output converted data
   }
