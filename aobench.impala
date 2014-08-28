@@ -288,4 +288,3 @@ fn main(int) -> () {
     render(img, WIDTH, HEIGHT, NSUBSAMPLES);
     saveppm("ao.ppm", WIDTH, HEIGHT, img);
 }
-
