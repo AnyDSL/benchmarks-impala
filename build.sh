@@ -16,11 +16,11 @@ esac
 for F in aobench fannkuch fasta mandelbrot meteor nbody pidigits spectral regex reverse
 do
     echo ">>> building ${F}_c.out"
-    clang -O3 -std=gnu99 ${INC_FLAGS} ${F}.c -o ${F}_c.out ${LD_FLAGS} -lm -lpcre -lgmp
+    clang -O3 -std=gnu99 ${INC_FLAGS} ${F}.c -o ${F}_c.out ${LD_FLAGS} -lm -lpcre -lgmp -s
 
     echo ">>> building ${F}_impala.out"
     impala ${F}.impala -emit-llvm
-    clang -O3 lib.o ${F}.bc ${LD_FLAGS} -lm -lpcre -lgmp -o ${F}_impala.out
+    clang -O3 -flto lib.o ${F}.ll ${LD_FLAGS} -lm -lpcre -lgmp -s -o ${F}_impala.out
 
     #echo ">>> building ${F}_rs.out"
     #rustc --opt-level 3 ${F}.rs -o ${F}_rs.out

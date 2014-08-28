@@ -37,8 +37,8 @@ void print_header(int w, int h) {
    printf("P4\n%d %d\n",w,h);
 }
 
-void put_i8(char c) {
-   putc(c, stdout);
+void put_u8(unsigned char ui) {
+   putc(ui, stdout);
 }
 
 void* thorin_malloc(size_t size) { 
