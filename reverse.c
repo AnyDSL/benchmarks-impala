@@ -72,6 +72,7 @@ int main () {                    // ***** main *****
       pr+=x;  pq+=x;  *(pq++) = 0xA;     // adjust pointers, add LF
         printf("inc: %i\n", (int)(pr-qqq));
     }
+    printf("next\n");
     //fwrite(qqq, 1, pq-qqq, stdout);      // output converted data
   }
   return 0;

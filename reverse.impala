@@ -30,7 +30,7 @@ fn take_address(&[u8]) -> () {}
 
 fn main(n: int) -> () {                                // ***** main *****
     let mut jjj: [u8*82];        // allocate input line buffer
-    let mut qqq = ~[5200: u8];   // output buffer (dyn. size)
+    let mut qqq = ~[QBFSIZE: u8];   // output buffer (dyn. size)
     let mut pqstop = QBFSIZE;        // size of qqq
     let mut xtab = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
                    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
@@ -62,7 +62,7 @@ fn main(n: int) -> () {                                // ***** main *****
     while pj {                       // MAIN LOOP: process data
         //println(&jjj);                   // output ID line
 
-        let mut pr = QBFSIZE;
+        let mut pr = pqstop;
         let mut pq = 1;
         
         while true {                    // LOOP: fill output buffer
@@ -106,6 +106,7 @@ fn main(n: int) -> () {                                // ***** main *****
             qqq(pq++) = 0xA_u8;       // adjust pointers, add LF
             print2("inc", pr);
         }
+        println("next");
         //println(qqq); // TODO output only pq characters // output converted data
     }
 }
