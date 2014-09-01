@@ -36,10 +36,10 @@ struct Ray {
     dir: vec,
 }
 
-static WIDTH       = 256;
-static HEIGHT      = 256;
+static WIDTH       = 1024;
+static HEIGHT      = 1024;
 static NSUBSAMPLES = 2;
-static NAO_SAMPLES = 8;
+static NAO_SAMPLES = 2;
 static M_PI        = 3.14159265358979323846;
 
 static mut spheres: [Sphere * 3];

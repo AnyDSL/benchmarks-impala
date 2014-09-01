@@ -1,3 +1,5 @@
+-- ported from https://github.com/mokehehe/aobench
+
 import System.Environment (getArgs)
 import System.IO (withBinaryFile, IOMode(..), hPutStrLn)
 import System.Random.Mersenne
@@ -254,10 +256,10 @@ getParam idx defaultVal args
 
 main = do
   args <- getArgs
-  let width  = read $ getParam 0 "256" args
-  let height = read $ getParam 1 "256" args
+  let width  = read $ getParam 0 "1024" args
+  let height = read $ getParam 1 "1024" args
   let nsubsamples = read $ getParam 2 "2" args
-  let nao_samples = read $ getParam 3 "8" args
+  let nao_samples = read $ getParam 3 "2" args
 
   img <- renderAmbientOcclusionScene init_scene width height nsubsamples nao_samples
   saveppm "ao.ppm" width height img

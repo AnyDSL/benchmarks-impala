@@ -4,10 +4,10 @@
 #include <assert.h>
 #include <math.h>
 
-#define WIDTH        256
-#define HEIGHT       256
+#define WIDTH        1024
+#define HEIGHT       1024
 #define NSUBSAMPLES  2
-#define NAO_SAMPLES  8
+#define NAO_SAMPLES  2
 
 typedef struct _vec
 {
