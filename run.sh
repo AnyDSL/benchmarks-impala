@@ -40,6 +40,7 @@ do
     fi
 done
 
+echo
 echo "BENCHMARKING... all reported times are in kiloseconds"
 echo
 
