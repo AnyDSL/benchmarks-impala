@@ -40,7 +40,7 @@ do
     fi
 done
 
-echo "BENCHMARKING"
+echo "BENCHMARKING... all reported times are in kiloseconds"
 echo
 
 function benchmark {
@@ -48,13 +48,13 @@ function benchmark {
     for k in 0 1 2 3 4 5 6 7 8 9 10
     do
         TIME=$( ( eval "time $1" ) |& sed -e '/user/!d' -e 's/user.*m//' -e 's/\.//' -e 's/s//')
-        echo "$k $TIME" >&2
+        echo "#$k: $TIME" >&2
         echo "$TIME"
     done | sort -n | head -n 6 | tail -n 1
 }
 
 for I in aobench_*.out; do
-    benchmark "./$I 5000 > out"
+    benchmark "./$I > out"
 done
 
 for I in fannkuch_*.out; do
