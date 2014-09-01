@@ -11,3 +11,8 @@ using cabal you can install all dependencies via:
 
 cabal update
 cabal install mersenne-random parallel regex-pcre vector
+
+# Run
+
+if everything is set up correctly simply run the benchmark suite with:
+./run.sh
