@@ -41,8 +41,11 @@ do
 done
 
 echo
-echo "BENCHMARKING... all reported times are in kiloseconds"
-echo
+echo "<<< generating input_regex.txt"
+./fasta_c.out 2500000 > input_regex.txt
+
+echo "<<< generating input_reverse.txt"
+./fasta_c.out 50000000 > input_reverse.txt
 
 function benchmark {
     echo ">>> $1"
@@ -53,6 +56,10 @@ function benchmark {
         echo "$TIME"
     done | sort -n | head -n 6 | tail -n 1
 }
+
+echo
+echo "BENCHMARKING... all reported times are in kiloseconds"
+echo
 
 for I in aobench_*.out; do
     benchmark "./$I > out"
@@ -87,9 +94,9 @@ for I in spectral_*.out; do
 done
 
 for I in regex_*.out; do
-    benchmark "./$I < input.txt > out"
+    benchmark "./$I < input_regex.txt > out"
 done
 
 for I in reverse_*.out; do
-    benchmark "./$I < input.txt > out"
+    benchmark "./$I < input_reverse.txt > out"
 done
