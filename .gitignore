@@ -6,3 +6,5 @@
 *.s
 ao.ppm
 out
+input_regex.txt
+input_reverse.txt
