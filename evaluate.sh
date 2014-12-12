@@ -3,7 +3,7 @@ export PATH=$PATH:/home/impala/impala/build/bin
 cd benchmarks-impala/
 echo -e "\e[0;31mPerformance Evaluation\e[0;37m"
 echo "-----------------------------"
-#./run.sh
+./run.sh
 echo "-----------------------------"
 echo -e "\e[0;31mHalstead Numbers\e[0;37m"
 cd halstead_numbers
