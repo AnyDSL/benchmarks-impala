@@ -23,7 +23,7 @@ do
 
     echo ">>> building ${F}_impala.out"
     impala ${F}.impala -emit-llvm -O3
-    clang -O3 -flto lib.o ${F}.ll ${LD_FLAGS} -lm -lpcre -lgmp -s -o ${F}_impala.out
+    clang -O3 lib.o ${F}.ll ${LD_FLAGS} -lm -lpcre -lgmp -s -o ${F}_impala.out
 
     if [ -e ${F}.rs ]
     then
@@ -52,8 +52,8 @@ function benchmark {
     for k in 0 1 2 3 4 5 6 7 8 9 10
     do
         TIME=$( ( eval "time $1" ) |& sed -e '/user/!d' -e 's/user.*m//' -e 's/\.//' -e 's/s//')
-        echo "#$k: $TIME" >&2
-        echo "$TIME"
+        echo "Run #$k: $TIME" >&2
+        echo -e "\e[0;32mMedian time for $1: $TIME\e[0;37m"
     done | sort -n | head -n 6 | tail -n 1
 }
 
