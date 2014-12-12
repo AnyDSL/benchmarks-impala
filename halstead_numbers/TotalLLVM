@@ -1,0 +1,2742 @@
+//===- CloneFunction.cpp - Clone a function into another function ---------===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements the CloneFunctionInto interface, which is used as the
+// low-level function cloner.  This is used by the CloneFunction and function
+// inliner to do the dirty work of copying the body of a function around.
+//
+//===----------------------------------------------------------------------===//
+
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/DebugInfo.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Metadata.h"
+#include "llvm/Support/CFG.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
+#include <map>
+using namespace llvm;
+
+// CloneBasicBlock - See comments in Cloning.h
+BasicBlock *llvm::CloneBasicBlock(const BasicBlock *BB,
+                                  ValueToValueMapTy &VMap,
+                                  const Twine &NameSuffix, Function *F,
+                                  ClonedCodeInfo *CodeInfo) {
+  BasicBlock *NewBB = BasicBlock::Create(BB->getContext(), "", F);
+  if (BB->hasName()) NewBB->setName(BB->getName()+NameSuffix);
+
+  bool hasCalls = false, hasDynamicAllocas = false, hasStaticAllocas = false;
+  
+  // Loop over all instructions, and copy them over.
+  for (BasicBlock::const_iterator II = BB->begin(), IE = BB->end();
+       II != IE; ++II) {
+    Instruction *NewInst = II->clone();
+    if (II->hasName())
+      NewInst->setName(II->getName()+NameSuffix);
+    NewBB->getInstList().push_back(NewInst);
+    VMap[II] = NewInst;                // Add instruction map to value.
+    
+    hasCalls |= (isa<CallInst>(II) && !isa<DbgInfoIntrinsic>(II));
+    if (const AllocaInst *AI = dyn_cast<AllocaInst>(II)) {
+      if (isa<ConstantInt>(AI->getArraySize()))
+        hasStaticAllocas = true;
+      else
+        hasDynamicAllocas = true;
+    }
+  }
+  
+  if (CodeInfo) {
+    CodeInfo->ContainsCalls          |= hasCalls;
+    CodeInfo->ContainsDynamicAllocas |= hasDynamicAllocas;
+    CodeInfo->ContainsDynamicAllocas |= hasStaticAllocas && 
+                                        BB != &BB->getParent()->getEntryBlock();
+  }
+  return NewBB;
+}
+
+// Clone OldFunc into NewFunc, transforming the old arguments into references to
+// VMap values.
+//
+void llvm::CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
+                             ValueToValueMapTy &VMap,
+                             bool ModuleLevelChanges,
+                             SmallVectorImpl<ReturnInst*> &Returns,
+                             const char *NameSuffix, ClonedCodeInfo *CodeInfo,
+                             ValueMapTypeRemapper *TypeMapper,
+                             ValueMaterializer *Materializer) {
+  assert(NameSuffix && "NameSuffix cannot be null!");
+
+#ifndef NDEBUG
+  for (Function::const_arg_iterator I = OldFunc->arg_begin(), 
+       E = OldFunc->arg_end(); I != E; ++I)
+    assert(VMap.count(I) && "No mapping from source argument specified!");
+#endif
+
+  AttributeSet OldAttrs = OldFunc->getAttributes();
+  // Clone any argument attributes that are present in the VMap.
+  for (Function::const_arg_iterator I = OldFunc->arg_begin(),
+                                    E = OldFunc->arg_end();
+       I != E; ++I)
+    if (Argument *Anew = dyn_cast<Argument>(VMap[I])) {
+      AttributeSet attrs =
+          OldAttrs.getParamAttributes(I->getArgNo() + 1);
+      if (attrs.getNumSlots() > 0)
+        Anew->addAttr(attrs);
+    }
+
+  NewFunc->setAttributes(NewFunc->getAttributes()
+                         .addAttributes(NewFunc->getContext(),
+                                        AttributeSet::ReturnIndex,
+                                        OldAttrs.getRetAttributes()));
+  NewFunc->setAttributes(NewFunc->getAttributes()
+                         .addAttributes(NewFunc->getContext(),
+                                        AttributeSet::FunctionIndex,
+                                        OldAttrs.getFnAttributes()));
+
+  // Loop over all of the basic blocks in the function, cloning them as
+  // appropriate.  Note that we save BE this way in order to handle cloning of
+  // recursive functions into themselves.
+  //
+  for (Function::const_iterator BI = OldFunc->begin(), BE = OldFunc->end();
+       BI != BE; ++BI) {
+    const BasicBlock &BB = *BI;
+
+    // Create a new basic block and copy instructions into it!
+    BasicBlock *CBB = CloneBasicBlock(&BB, VMap, NameSuffix, NewFunc, CodeInfo);
+
+    // Add basic block mapping.
+    VMap[&BB] = CBB;
+
+    // It is only legal to clone a function if a block address within that
+    // function is never referenced outside of the function.  Given that, we
+    // want to map block addresses from the old function to block addresses in
+    // the clone. (This is different from the generic ValueMapper
+    // implementation, which generates an invalid blockaddress when
+    // cloning a function.)
+    if (BB.hasAddressTaken()) {
+      Constant *OldBBAddr = BlockAddress::get(const_cast<Function*>(OldFunc),
+                                              const_cast<BasicBlock*>(&BB));
+      VMap[OldBBAddr] = BlockAddress::get(NewFunc, CBB);                                         
+    }
+
+    // Note return instructions for the caller.
+    if (ReturnInst *RI = dyn_cast<ReturnInst>(CBB->getTerminator()))
+      Returns.push_back(RI);
+  }
+
+  // Loop over all of the instructions in the function, fixing up operand
+  // references as we go.  This uses VMap to do all the hard work.
+  for (Function::iterator BB = cast<BasicBlock>(VMap[OldFunc->begin()]),
+         BE = NewFunc->end(); BB != BE; ++BB)
+    // Loop over all instructions, fixing each one as we find it...
+    for (BasicBlock::iterator II = BB->begin(); II != BB->end(); ++II)
+      RemapInstruction(II, VMap,
+                       ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges,
+                       TypeMapper, Materializer);
+}
+
+/// CloneFunction - Return a copy of the specified function, but without
+/// embedding the function into another module.  Also, any references specified
+/// in the VMap are changed to refer to their mapped value instead of the
+/// original one.  If any of the arguments to the function are in the VMap,
+/// the arguments are deleted from the resultant function.  The VMap is
+/// updated to include mappings from all of the instructions and basicblocks in
+/// the function from their old to new values.
+///
+Function *llvm::CloneFunction(const Function *F, ValueToValueMapTy &VMap,
+                              bool ModuleLevelChanges,
+                              ClonedCodeInfo *CodeInfo) {
+  std::vector<Type*> ArgTypes;
+
+  // The user might be deleting arguments to the function by specifying them in
+  // the VMap.  If so, we need to not add the arguments to the arg ty vector
+  //
+  for (Function::const_arg_iterator I = F->arg_begin(), E = F->arg_end();
+       I != E; ++I)
+    if (VMap.count(I) == 0)  // Haven't mapped the argument to anything yet?
+      ArgTypes.push_back(I->getType());
+
+  // Create a new function type...
+  FunctionType *FTy = FunctionType::get(F->getFunctionType()->getReturnType(),
+                                    ArgTypes, F->getFunctionType()->isVarArg());
+
+  // Create the new function...
+  Function *NewF = Function::Create(FTy, F->getLinkage(), F->getName());
+
+  // Loop over the arguments, copying the names of the mapped arguments over...
+  Function::arg_iterator DestI = NewF->arg_begin();
+  for (Function::const_arg_iterator I = F->arg_begin(), E = F->arg_end();
+       I != E; ++I)
+    if (VMap.count(I) == 0) {   // Is this argument preserved?
+      DestI->setName(I->getName()); // Copy the name over...
+      VMap[I] = DestI++;        // Add mapping to VMap
+    }
+
+  SmallVector<ReturnInst*, 8> Returns;  // Ignore returns cloned.
+  CloneFunctionInto(NewF, F, VMap, ModuleLevelChanges, Returns, "", CodeInfo);
+  return NewF;
+}
+
+
+
+namespace {
+  /// PruningFunctionCloner - This class is a private class used to implement
+  /// the CloneAndPruneFunctionInto method.
+  struct PruningFunctionCloner {
+    Function *NewFunc;
+    const Function *OldFunc;
+    ValueToValueMapTy &VMap;
+    bool ModuleLevelChanges;
+    const char *NameSuffix;
+    ClonedCodeInfo *CodeInfo;
+    const DataLayout *TD;
+  public:
+    PruningFunctionCloner(Function *newFunc, const Function *oldFunc,
+                          ValueToValueMapTy &valueMap,
+                          bool moduleLevelChanges,
+                          const char *nameSuffix, 
+                          ClonedCodeInfo *codeInfo,
+                          const DataLayout *td)
+    : NewFunc(newFunc), OldFunc(oldFunc),
+      VMap(valueMap), ModuleLevelChanges(moduleLevelChanges),
+      NameSuffix(nameSuffix), CodeInfo(codeInfo), TD(td) {
+    }
+
+    /// CloneBlock - The specified block is found to be reachable, clone it and
+    /// anything that it can reach.
+    void CloneBlock(const BasicBlock *BB,
+                    std::vector<const BasicBlock*> &ToClone);
+  };
+}
+
+/// CloneBlock - The specified block is found to be reachable, clone it and
+/// anything that it can reach.
+void PruningFunctionCloner::CloneBlock(const BasicBlock *BB,
+                                       std::vector<const BasicBlock*> &ToClone){
+  WeakVH &BBEntry = VMap[BB];
+
+  // Have we already cloned this block?
+  if (BBEntry) return;
+  
+  // Nope, clone it now.
+  BasicBlock *NewBB;
+  BBEntry = NewBB = BasicBlock::Create(BB->getContext());
+  if (BB->hasName()) NewBB->setName(BB->getName()+NameSuffix);
+
+  // It is only legal to clone a function if a block address within that
+  // function is never referenced outside of the function.  Given that, we
+  // want to map block addresses from the old function to block addresses in
+  // the clone. (This is different from the generic ValueMapper
+  // implementation, which generates an invalid blockaddress when
+  // cloning a function.)
+  //
+  // Note that we don't need to fix the mapping for unreachable blocks;
+  // the default mapping there is safe.
+  if (BB->hasAddressTaken()) {
+    Constant *OldBBAddr = BlockAddress::get(const_cast<Function*>(OldFunc),
+                                            const_cast<BasicBlock*>(BB));
+    VMap[OldBBAddr] = BlockAddress::get(NewFunc, NewBB);
+  }
+    
+
+  bool hasCalls = false, hasDynamicAllocas = false, hasStaticAllocas = false;
+  
+  // Loop over all instructions, and copy them over, DCE'ing as we go.  This
+  // loop doesn't include the terminator.
+  for (BasicBlock::const_iterator II = BB->begin(), IE = --BB->end();
+       II != IE; ++II) {
+    Instruction *NewInst = II->clone();
+
+    // Eagerly remap operands to the newly cloned instruction, except for PHI
+    // nodes for which we defer processing until we update the CFG.
+    if (!isa<PHINode>(NewInst)) {
+      RemapInstruction(NewInst, VMap,
+                       ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges);
+
+      // If we can simplify this instruction to some other value, simply add
+      // a mapping to that value rather than inserting a new instruction into
+      // the basic block.
+      if (Value *V = SimplifyInstruction(NewInst, TD)) {
+        // On the off-chance that this simplifies to an instruction in the old
+        // function, map it back into the new function.
+        if (Value *MappedV = VMap.lookup(V))
+          V = MappedV;
+
+        VMap[II] = V;
+        delete NewInst;
+        continue;
+      }
+    }
+
+    if (II->hasName())
+      NewInst->setName(II->getName()+NameSuffix);
+    VMap[II] = NewInst;                // Add instruction map to value.
+    NewBB->getInstList().push_back(NewInst);
+    hasCalls |= (isa<CallInst>(II) && !isa<DbgInfoIntrinsic>(II));
+    if (const AllocaInst *AI = dyn_cast<AllocaInst>(II)) {
+      if (isa<ConstantInt>(AI->getArraySize()))
+        hasStaticAllocas = true;
+      else
+        hasDynamicAllocas = true;
+    }
+  }
+  
+  // Finally, clone over the terminator.
+  const TerminatorInst *OldTI = BB->getTerminator();
+  bool TerminatorDone = false;
+  if (const BranchInst *BI = dyn_cast<BranchInst>(OldTI)) {
+    if (BI->isConditional()) {
+      // If the condition was a known constant in the callee...
+      ConstantInt *Cond = dyn_cast<ConstantInt>(BI->getCondition());
+      // Or is a known constant in the caller...
+      if (Cond == 0) {
+        Value *V = VMap[BI->getCondition()];
+        Cond = dyn_cast_or_null<ConstantInt>(V);
+      }
+
+      // Constant fold to uncond branch!
+      if (Cond) {
+        BasicBlock *Dest = BI->getSuccessor(!Cond->getZExtValue());
+        VMap[OldTI] = BranchInst::Create(Dest, NewBB);
+        ToClone.push_back(Dest);
+        TerminatorDone = true;
+      }
+    }
+  } else if (const SwitchInst *SI = dyn_cast<SwitchInst>(OldTI)) {
+    // If switching on a value known constant in the caller.
+    ConstantInt *Cond = dyn_cast<ConstantInt>(SI->getCondition());
+    if (Cond == 0) { // Or known constant after constant prop in the callee...
+      Value *V = VMap[SI->getCondition()];
+      Cond = dyn_cast_or_null<ConstantInt>(V);
+    }
+    if (Cond) {     // Constant fold to uncond branch!
+      SwitchInst::ConstCaseIt Case = SI->findCaseValue(Cond);
+      BasicBlock *Dest = const_cast<BasicBlock*>(Case.getCaseSuccessor());
+      VMap[OldTI] = BranchInst::Create(Dest, NewBB);
+      ToClone.push_back(Dest);
+      TerminatorDone = true;
+    }
+  }
+  
+  if (!TerminatorDone) {
+    Instruction *NewInst = OldTI->clone();
+    if (OldTI->hasName())
+      NewInst->setName(OldTI->getName()+NameSuffix);
+    NewBB->getInstList().push_back(NewInst);
+    VMap[OldTI] = NewInst;             // Add instruction map to value.
+    
+    // Recursively clone any reachable successor blocks.
+    const TerminatorInst *TI = BB->getTerminator();
+    for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
+      ToClone.push_back(TI->getSuccessor(i));
+  }
+  
+  if (CodeInfo) {
+    CodeInfo->ContainsCalls          |= hasCalls;
+    CodeInfo->ContainsDynamicAllocas |= hasDynamicAllocas;
+    CodeInfo->ContainsDynamicAllocas |= hasStaticAllocas && 
+      BB != &BB->getParent()->front();
+  }
+}
+
+/// CloneAndPruneFunctionInto - This works exactly like CloneFunctionInto,
+/// except that it does some simple constant prop and DCE on the fly.  The
+/// effect of this is to copy significantly less code in cases where (for
+/// example) a function call with constant arguments is inlined, and those
+/// constant arguments cause a significant amount of code in the callee to be
+/// dead.  Since this doesn't produce an exact copy of the input, it can't be
+/// used for things like CloneFunction or CloneModule.
+void llvm::CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
+                                     ValueToValueMapTy &VMap,
+                                     bool ModuleLevelChanges,
+                                     SmallVectorImpl<ReturnInst*> &Returns,
+                                     const char *NameSuffix, 
+                                     ClonedCodeInfo *CodeInfo,
+                                     const DataLayout *TD,
+                                     Instruction *TheCall) {
+  assert(NameSuffix && "NameSuffix cannot be null!");
+  
+#ifndef NDEBUG
+  for (Function::const_arg_iterator II = OldFunc->arg_begin(), 
+       E = OldFunc->arg_end(); II != E; ++II)
+    assert(VMap.count(II) && "No mapping from source argument specified!");
+#endif
+
+  PruningFunctionCloner PFC(NewFunc, OldFunc, VMap, ModuleLevelChanges,
+                            NameSuffix, CodeInfo, TD);
+
+  // Clone the entry block, and anything recursively reachable from it.
+  std::vector<const BasicBlock*> CloneWorklist;
+  CloneWorklist.push_back(&OldFunc->getEntryBlock());
+  while (!CloneWorklist.empty()) {
+    const BasicBlock *BB = CloneWorklist.back();
+    CloneWorklist.pop_back();
+    PFC.CloneBlock(BB, CloneWorklist);
+  }
+  
+  // Loop over all of the basic blocks in the old function.  If the block was
+  // reachable, we have cloned it and the old block is now in the value map:
+  // insert it into the new function in the right order.  If not, ignore it.
+  //
+  // Defer PHI resolution until rest of function is resolved.
+  SmallVector<const PHINode*, 16> PHIToResolve;
+  for (Function::const_iterator BI = OldFunc->begin(), BE = OldFunc->end();
+       BI != BE; ++BI) {
+    Value *V = VMap[BI];
+    BasicBlock *NewBB = cast_or_null<BasicBlock>(V);
+    if (NewBB == 0) continue;  // Dead block.
+
+    // Add the new block to the new function.
+    NewFunc->getBasicBlockList().push_back(NewBB);
+
+    // Handle PHI nodes specially, as we have to remove references to dead
+    // blocks.
+    for (BasicBlock::const_iterator I = BI->begin(), E = BI->end(); I != E; ++I)
+      if (const PHINode *PN = dyn_cast<PHINode>(I))
+        PHIToResolve.push_back(PN);
+      else
+        break;
+
+    // Finally, remap the terminator instructions, as those can't be remapped
+    // until all BBs are mapped.
+    RemapInstruction(NewBB->getTerminator(), VMap,
+                     ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges);
+  }
+  
+  // Defer PHI resolution until rest of function is resolved, PHI resolution
+  // requires the CFG to be up-to-date.
+  for (unsigned phino = 0, e = PHIToResolve.size(); phino != e; ) {
+    const PHINode *OPN = PHIToResolve[phino];
+    unsigned NumPreds = OPN->getNumIncomingValues();
+    const BasicBlock *OldBB = OPN->getParent();
+    BasicBlock *NewBB = cast<BasicBlock>(VMap[OldBB]);
+
+    // Map operands for blocks that are live and remove operands for blocks
+    // that are dead.
+    for (; phino != PHIToResolve.size() &&
+         PHIToResolve[phino]->getParent() == OldBB; ++phino) {
+      OPN = PHIToResolve[phino];
+      PHINode *PN = cast<PHINode>(VMap[OPN]);
+      for (unsigned pred = 0, e = NumPreds; pred != e; ++pred) {
+        Value *V = VMap[PN->getIncomingBlock(pred)];
+        if (BasicBlock *MappedBlock = cast_or_null<BasicBlock>(V)) {
+          Value *InVal = MapValue(PN->getIncomingValue(pred),
+                                  VMap, 
+                        ModuleLevelChanges ? RF_None : RF_NoModuleLevelChanges);
+          assert(InVal && "Unknown input value?");
+          PN->setIncomingValue(pred, InVal);
+          PN->setIncomingBlock(pred, MappedBlock);
+        } else {
+          PN->removeIncomingValue(pred, false);
+          --pred, --e;  // Revisit the next entry.
+        }
+      } 
+    }
+    
+    // The loop above has removed PHI entries for those blocks that are dead
+    // and has updated others.  However, if a block is live (i.e. copied over)
+    // but its terminator has been changed to not go to this block, then our
+    // phi nodes will have invalid entries.  Update the PHI nodes in this
+    // case.
+    PHINode *PN = cast<PHINode>(NewBB->begin());
+    NumPreds = std::distance(pred_begin(NewBB), pred_end(NewBB));
+    if (NumPreds != PN->getNumIncomingValues()) {
+      assert(NumPreds < PN->getNumIncomingValues());
+      // Count how many times each predecessor comes to this block.
+      std::map<BasicBlock*, unsigned> PredCount;
+      for (pred_iterator PI = pred_begin(NewBB), E = pred_end(NewBB);
+           PI != E; ++PI)
+        --PredCount[*PI];
+      
+      // Figure out how many entries to remove from each PHI.
+      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+        ++PredCount[PN->getIncomingBlock(i)];
+      
+      // At this point, the excess predecessor entries are positive in the
+      // map.  Loop over all of the PHIs and remove excess predecessor
+      // entries.
+      BasicBlock::iterator I = NewBB->begin();
+      for (; (PN = dyn_cast<PHINode>(I)); ++I) {
+        for (std::map<BasicBlock*, unsigned>::iterator PCI =PredCount.begin(),
+             E = PredCount.end(); PCI != E; ++PCI) {
+          BasicBlock *Pred     = PCI->first;
+          for (unsigned NumToRemove = PCI->second; NumToRemove; --NumToRemove)
+            PN->removeIncomingValue(Pred, false);
+        }
+      }
+    }
+    
+    // If the loops above have made these phi nodes have 0 or 1 operand,
+    // replace them with undef or the input value.  We must do this for
+    // correctness, because 0-operand phis are not valid.
+    PN = cast<PHINode>(NewBB->begin());
+    if (PN->getNumIncomingValues() == 0) {
+      BasicBlock::iterator I = NewBB->begin();
+      BasicBlock::const_iterator OldI = OldBB->begin();
+      while ((PN = dyn_cast<PHINode>(I++))) {
+        Value *NV = UndefValue::get(PN->getType());
+        PN->replaceAllUsesWith(NV);
+        assert(VMap[OldI] == PN && "VMap mismatch");
+        VMap[OldI] = NV;
+        PN->eraseFromParent();
+        ++OldI;
+      }
+    }
+  }
+
+  // Make a second pass over the PHINodes now that all of them have been
+  // remapped into the new function, simplifying the PHINode and performing any
+  // recursive simplifications exposed. This will transparently update the
+  // WeakVH in the VMap. Notably, we rely on that so that if we coalesce
+  // two PHINodes, the iteration over the old PHIs remains valid, and the
+  // mapping will just map us to the new node (which may not even be a PHI
+  // node).
+  for (unsigned Idx = 0, Size = PHIToResolve.size(); Idx != Size; ++Idx)
+    if (PHINode *PN = dyn_cast<PHINode>(VMap[PHIToResolve[Idx]]))
+      recursivelySimplifyInstruction(PN, TD);
+
+  // Now that the inlined function body has been fully constructed, go through
+  // and zap unconditional fall-through branches.  This happen all the time when
+  // specializing code: code specialization turns conditional branches into
+  // uncond branches, and this code folds them.
+  Function::iterator Begin = cast<BasicBlock>(VMap[&OldFunc->getEntryBlock()]);
+  Function::iterator I = Begin;
+  while (I != NewFunc->end()) {
+    // Check if this block has become dead during inlining or other
+    // simplifications. Note that the first block will appear dead, as it has
+    // not yet been wired up properly.
+    if (I != Begin && (pred_begin(I) == pred_end(I) ||
+                       I->getSinglePredecessor() == I)) {
+      BasicBlock *DeadBB = I++;
+      DeleteDeadBlock(DeadBB);
+      continue;
+    }
+
+    // We need to simplify conditional branches and switches with a constant
+    // operand. We try to prune these out when cloning, but if the
+    // simplification required looking through PHI nodes, those are only
+    // available after forming the full basic block. That may leave some here,
+    // and we still want to prune the dead code as early as possible.
+    ConstantFoldTerminator(I);
+
+    BranchInst *BI = dyn_cast<BranchInst>(I->getTerminator());
+    if (!BI || BI->isConditional()) { ++I; continue; }
+    
+    BasicBlock *Dest = BI->getSuccessor(0);
+    if (!Dest->getSinglePredecessor()) {
+      ++I; continue;
+    }
+
+    // We shouldn't be able to get single-entry PHI nodes here, as instsimplify
+    // above should have zapped all of them..
+    assert(!isa<PHINode>(Dest->begin()));
+
+    // We know all single-entry PHI nodes in the inlined function have been
+    // removed, so we just need to splice the blocks.
+    BI->eraseFromParent();
+    
+    // Make all PHI nodes that referred to Dest now refer to I as their source.
+    Dest->replaceAllUsesWith(I);
+
+    // Move all the instructions in the succ to the pred.
+    I->getInstList().splice(I->end(), Dest->getInstList());
+    
+    // Remove the dest block.
+    Dest->eraseFromParent();
+    
+    // Do not increment I, iteratively merge all things this block branches to.
+  }
+
+  // Make a final pass over the basic blocks from theh old function to gather
+  // any return instructions which survived folding. We have to do this here
+  // because we can iteratively remove and merge returns above.
+  for (Function::iterator I = cast<BasicBlock>(VMap[&OldFunc->getEntryBlock()]),
+                          E = NewFunc->end();
+       I != E; ++I)
+    if (ReturnInst *RI = dyn_cast<ReturnInst>(I->getTerminator()))
+      Returns.push_back(RI);
+}
+//===- CodeExtractor.cpp - Pull code region into a new function -----------===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements the interface to tear out a code region, such as an
+// individual loop or a parallel section, into a new function, replacing it with
+// a call to the new function.
+//
+//===----------------------------------------------------------------------===//
+
+#include "llvm/Transforms/Utils/CodeExtractor.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/Dominators.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/RegionInfo.h"
+#include "llvm/Analysis/RegionIterator.h"
+#include "llvm/Analysis/Verifier.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include <algorithm>
+#include <set>
+using namespace llvm;
+
+// Provide a command-line option to aggregate function arguments into a struct
+// for functions produced by the code extractor. This is useful when converting
+// extracted functions to pthread-based code, as only one argument (void*) can
+// be passed in to pthread_create().
+static cl::opt<bool>
+AggregateArgsOpt("aggregate-extracted-args", cl::Hidden,
+                 cl::desc("Aggregate arguments to code-extracted functions"));
+
+/// \brief Test whether a block is valid for extraction.
+static bool isBlockValidForExtraction(const BasicBlock &BB) {
+  // Landing pads must be in the function where they were inserted for cleanup.
+  if (BB.isLandingPad())
+    return false;
+
+  // Don't hoist code containing allocas, invokes, or vastarts.
+  for (BasicBlock::const_iterator I = BB.begin(), E = BB.end(); I != E; ++I) {
+    if (isa<AllocaInst>(I) || isa<InvokeInst>(I))
+      return false;
+    if (const CallInst *CI = dyn_cast<CallInst>(I))
+      if (const Function *F = CI->getCalledFunction())
+        if (F->getIntrinsicID() == Intrinsic::vastart)
+          return false;
+  }
+
+  return true;
+}
+
+/// \brief Build a set of blocks to extract if the input blocks are viable.
+template <typename IteratorT>
+static SetVector<BasicBlock *> buildExtractionBlockSet(IteratorT BBBegin,
+                                                       IteratorT BBEnd) {
+  SetVector<BasicBlock *> Result;
+
+  assert(BBBegin != BBEnd);
+
+  // Loop over the blocks, adding them to our set-vector, and aborting with an
+  // empty set if we encounter invalid blocks.
+  for (IteratorT I = BBBegin, E = BBEnd; I != E; ++I) {
+    if (!Result.insert(*I))
+      llvm_unreachable("Repeated basic blocks in extraction input");
+
+    if (!isBlockValidForExtraction(**I)) {
+      Result.clear();
+      return Result;
+    }
+  }
+
+#ifndef NDEBUG
+  for (SetVector<BasicBlock *>::iterator I = llvm::next(Result.begin()),
+                                         E = Result.end();
+       I != E; ++I)
+    for (pred_iterator PI = pred_begin(*I), PE = pred_end(*I);
+         PI != PE; ++PI)
+      assert(Result.count(*PI) &&
+             "No blocks in this region may have entries from outside the region"
+             " except for the first block!");
+#endif
+
+  return Result;
+}
+
+/// \brief Helper to call buildExtractionBlockSet with an ArrayRef.
+static SetVector<BasicBlock *>
+buildExtractionBlockSet(ArrayRef<BasicBlock *> BBs) {
+  return buildExtractionBlockSet(BBs.begin(), BBs.end());
+}
+
+/// \brief Helper to call buildExtractionBlockSet with a RegionNode.
+static SetVector<BasicBlock *>
+buildExtractionBlockSet(const RegionNode &RN) {
+  if (!RN.isSubRegion())
+    // Just a single BasicBlock.
+    return buildExtractionBlockSet(RN.getNodeAs<BasicBlock>());
+
+  const Region &R = *RN.getNodeAs<Region>();
+
+  return buildExtractionBlockSet(R.block_begin(), R.block_end());
+}
+
+CodeExtractor::CodeExtractor(BasicBlock *BB, bool AggregateArgs)
+  : DT(0), AggregateArgs(AggregateArgs||AggregateArgsOpt),
+    Blocks(buildExtractionBlockSet(BB)), NumExitBlocks(~0U) {}
+
+CodeExtractor::CodeExtractor(ArrayRef<BasicBlock *> BBs, DominatorTree *DT,
+                             bool AggregateArgs)
+  : DT(DT), AggregateArgs(AggregateArgs||AggregateArgsOpt),
+    Blocks(buildExtractionBlockSet(BBs)), NumExitBlocks(~0U) {}
+
+CodeExtractor::CodeExtractor(DominatorTree &DT, Loop &L, bool AggregateArgs)
+  : DT(&DT), AggregateArgs(AggregateArgs||AggregateArgsOpt),
+    Blocks(buildExtractionBlockSet(L.getBlocks())), NumExitBlocks(~0U) {}
+
+CodeExtractor::CodeExtractor(DominatorTree &DT, const RegionNode &RN,
+                             bool AggregateArgs)
+  : DT(&DT), AggregateArgs(AggregateArgs||AggregateArgsOpt),
+    Blocks(buildExtractionBlockSet(RN)), NumExitBlocks(~0U) {}
+
+/// definedInRegion - Return true if the specified value is defined in the
+/// extracted region.
+static bool definedInRegion(const SetVector<BasicBlock *> &Blocks, Value *V) {
+  if (Instruction *I = dyn_cast<Instruction>(V))
+    if (Blocks.count(I->getParent()))
+      return true;
+  return false;
+}
+
+/// definedInCaller - Return true if the specified value is defined in the
+/// function being code extracted, but not in the region being extracted.
+/// These values must be passed in as live-ins to the function.
+static bool definedInCaller(const SetVector<BasicBlock *> &Blocks, Value *V) {
+  if (isa<Argument>(V)) return true;
+  if (Instruction *I = dyn_cast<Instruction>(V))
+    if (!Blocks.count(I->getParent()))
+      return true;
+  return false;
+}
+
+void CodeExtractor::findInputsOutputs(ValueSet &Inputs,
+                                      ValueSet &Outputs) const {
+  for (SetVector<BasicBlock *>::const_iterator I = Blocks.begin(),
+                                               E = Blocks.end();
+       I != E; ++I) {
+    BasicBlock *BB = *I;
+
+    // If a used value is defined outside the region, it's an input.  If an
+    // instruction is used outside the region, it's an output.
+    for (BasicBlock::iterator II = BB->begin(), IE = BB->end();
+         II != IE; ++II) {
+      for (User::op_iterator OI = II->op_begin(), OE = II->op_end();
+           OI != OE; ++OI)
+        if (definedInCaller(Blocks, *OI))
+          Inputs.insert(*OI);
+
+      for (Value::use_iterator UI = II->use_begin(), UE = II->use_end();
+           UI != UE; ++UI)
+        if (!definedInRegion(Blocks, *UI)) {
+          Outputs.insert(II);
+          break;
+        }
+    }
+  }
+}
+
+/// severSplitPHINodes - If a PHI node has multiple inputs from outside of the
+/// region, we need to split the entry block of the region so that the PHI node
+/// is easier to deal with.
+void CodeExtractor::severSplitPHINodes(BasicBlock *&Header) {
+  unsigned NumPredsFromRegion = 0;
+  unsigned NumPredsOutsideRegion = 0;
+
+  if (Header != &Header->getParent()->getEntryBlock()) {
+    PHINode *PN = dyn_cast<PHINode>(Header->begin());
+    if (!PN) return;  // No PHI nodes.
+
+    // If the header node contains any PHI nodes, check to see if there is more
+    // than one entry from outside the region.  If so, we need to sever the
+    // header block into two.
+    for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+      if (Blocks.count(PN->getIncomingBlock(i)))
+        ++NumPredsFromRegion;
+      else
+        ++NumPredsOutsideRegion;
+
+    // If there is one (or fewer) predecessor from outside the region, we don't
+    // need to do anything special.
+    if (NumPredsOutsideRegion <= 1) return;
+  }
+
+  // Otherwise, we need to split the header block into two pieces: one
+  // containing PHI nodes merging values from outside of the region, and a
+  // second that contains all of the code for the block and merges back any
+  // incoming values from inside of the region.
+  BasicBlock::iterator AfterPHIs = Header->getFirstNonPHI();
+  BasicBlock *NewBB = Header->splitBasicBlock(AfterPHIs,
+                                              Header->getName()+".ce");
+
+  // We only want to code extract the second block now, and it becomes the new
+  // header of the region.
+  BasicBlock *OldPred = Header;
+  Blocks.remove(OldPred);
+  Blocks.insert(NewBB);
+  Header = NewBB;
+
+  // Okay, update dominator sets. The blocks that dominate the new one are the
+  // blocks that dominate TIBB plus the new block itself.
+  if (DT)
+    DT->splitBlock(NewBB);
+
+  // Okay, now we need to adjust the PHI nodes and any branches from within the
+  // region to go to the new header block instead of the old header block.
+  if (NumPredsFromRegion) {
+    PHINode *PN = cast<PHINode>(OldPred->begin());
+    // Loop over all of the predecessors of OldPred that are in the region,
+    // changing them to branch to NewBB instead.
+    for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+      if (Blocks.count(PN->getIncomingBlock(i))) {
+        TerminatorInst *TI = PN->getIncomingBlock(i)->getTerminator();
+        TI->replaceUsesOfWith(OldPred, NewBB);
+      }
+
+    // Okay, everything within the region is now branching to the right block, we
+    // just have to update the PHI nodes now, inserting PHI nodes into NewBB.
+    for (AfterPHIs = OldPred->begin(); isa<PHINode>(AfterPHIs); ++AfterPHIs) {
+      PHINode *PN = cast<PHINode>(AfterPHIs);
+      // Create a new PHI node in the new region, which has an incoming value
+      // from OldPred of PN.
+      PHINode *NewPN = PHINode::Create(PN->getType(), 1 + NumPredsFromRegion,
+                                       PN->getName()+".ce", NewBB->begin());
+      NewPN->addIncoming(PN, OldPred);
+
+      // Loop over all of the incoming value in PN, moving them to NewPN if they
+      // are from the extracted region.
+      for (unsigned i = 0; i != PN->getNumIncomingValues(); ++i) {
+        if (Blocks.count(PN->getIncomingBlock(i))) {
+          NewPN->addIncoming(PN->getIncomingValue(i), PN->getIncomingBlock(i));
+          PN->removeIncomingValue(i);
+          --i;
+        }
+      }
+    }
+  }
+}
+
+void CodeExtractor::splitReturnBlocks() {
+  for (SetVector<BasicBlock *>::iterator I = Blocks.begin(), E = Blocks.end();
+       I != E; ++I)
+    if (ReturnInst *RI = dyn_cast<ReturnInst>((*I)->getTerminator())) {
+      BasicBlock *New = (*I)->splitBasicBlock(RI, (*I)->getName()+".ret");
+      if (DT) {
+        // Old dominates New. New node dominates all other nodes dominated
+        // by Old.
+        DomTreeNode *OldNode = DT->getNode(*I);
+        SmallVector<DomTreeNode*, 8> Children;
+        for (DomTreeNode::iterator DI = OldNode->begin(), DE = OldNode->end();
+             DI != DE; ++DI) 
+          Children.push_back(*DI);
+
+        DomTreeNode *NewNode = DT->addNewBlock(New, *I);
+
+        for (SmallVectorImpl<DomTreeNode *>::iterator I = Children.begin(),
+               E = Children.end(); I != E; ++I)
+          DT->changeImmediateDominator(*I, NewNode);
+      }
+    }
+}
+
+/// constructFunction - make a function based on inputs and outputs, as follows:
+/// f(in0, ..., inN, out0, ..., outN)
+///
+Function *CodeExtractor::constructFunction(const ValueSet &inputs,
+                                           const ValueSet &outputs,
+                                           BasicBlock *header,
+                                           BasicBlock *newRootNode,
+                                           BasicBlock *newHeader,
+                                           Function *oldFunction,
+                                           Module *M) {
+  DEBUG(dbgs() << "inputs: " << inputs.size() << "\n");
+  DEBUG(dbgs() << "outputs: " << outputs.size() << "\n");
+
+  // This function returns unsigned, outputs will go back by reference.
+  switch (NumExitBlocks) {
+  case 0:
+  case 1: RetTy = Type::getVoidTy(header->getContext()); break;
+  case 2: RetTy = Type::getInt1Ty(header->getContext()); break;
+  default: RetTy = Type::getInt16Ty(header->getContext()); break;
+  }
+
+  std::vector<Type*> paramTy;
+
+  // Add the types of the input values to the function's argument list
+  for (ValueSet::const_iterator i = inputs.begin(), e = inputs.end();
+       i != e; ++i) {
+    const Value *value = *i;
+    DEBUG(dbgs() << "value used in func: " << *value << "\n");
+    paramTy.push_back(value->getType());
+  }
+
+  // Add the types of the output values to the function's argument list.
+  for (ValueSet::const_iterator I = outputs.begin(), E = outputs.end();
+       I != E; ++I) {
+    DEBUG(dbgs() << "instr used in func: " << **I << "\n");
+    if (AggregateArgs)
+      paramTy.push_back((*I)->getType());
+    else
+      paramTy.push_back(PointerType::getUnqual((*I)->getType()));
+  }
+
+  DEBUG(dbgs() << "Function type: " << *RetTy << " f(");
+  for (std::vector<Type*>::iterator i = paramTy.begin(),
+         e = paramTy.end(); i != e; ++i)
+    DEBUG(dbgs() << **i << ", ");
+  DEBUG(dbgs() << ")\n");
+
+  if (AggregateArgs && (inputs.size() + outputs.size() > 0)) {
+    PointerType *StructPtr =
+           PointerType::getUnqual(StructType::get(M->getContext(), paramTy));
+    paramTy.clear();
+    paramTy.push_back(StructPtr);
+  }
+  FunctionType *funcType =
+                  FunctionType::get(RetTy, paramTy, false);
+
+  // Create the new function
+  Function *newFunction = Function::Create(funcType,
+                                           GlobalValue::InternalLinkage,
+                                           oldFunction->getName() + "_" +
+                                           header->getName(), M);
+  // If the old function is no-throw, so is the new one.
+  if (oldFunction->doesNotThrow())
+    newFunction->setDoesNotThrow();
+  
+  newFunction->getBasicBlockList().push_back(newRootNode);
+
+  // Create an iterator to name all of the arguments we inserted.
+  Function::arg_iterator AI = newFunction->arg_begin();
+
+  // Rewrite all users of the inputs in the extracted region to use the
+  // arguments (or appropriate addressing into struct) instead.
+  for (unsigned i = 0, e = inputs.size(); i != e; ++i) {
+    Value *RewriteVal;
+    if (AggregateArgs) {
+      Value *Idx[2];
+      Idx[0] = Constant::getNullValue(Type::getInt32Ty(header->getContext()));
+      Idx[1] = ConstantInt::get(Type::getInt32Ty(header->getContext()), i);
+      TerminatorInst *TI = newFunction->begin()->getTerminator();
+      GetElementPtrInst *GEP = 
+        GetElementPtrInst::Create(AI, Idx, "gep_" + inputs[i]->getName(), TI);
+      RewriteVal = new LoadInst(GEP, "loadgep_" + inputs[i]->getName(), TI);
+    } else
+      RewriteVal = AI++;
+
+    std::vector<User*> Users(inputs[i]->use_begin(), inputs[i]->use_end());
+    for (std::vector<User*>::iterator use = Users.begin(), useE = Users.end();
+         use != useE; ++use)
+      if (Instruction* inst = dyn_cast<Instruction>(*use))
+        if (Blocks.count(inst->getParent()))
+          inst->replaceUsesOfWith(inputs[i], RewriteVal);
+  }
+
+  // Set names for input and output arguments.
+  if (!AggregateArgs) {
+    AI = newFunction->arg_begin();
+    for (unsigned i = 0, e = inputs.size(); i != e; ++i, ++AI)
+      AI->setName(inputs[i]->getName());
+    for (unsigned i = 0, e = outputs.size(); i != e; ++i, ++AI)
+      AI->setName(outputs[i]->getName()+".out");
+  }
+
+  // Rewrite branches to basic blocks outside of the loop to new dummy blocks
+  // within the new function. This must be done before we lose track of which
+  // blocks were originally in the code region.
+  std::vector<User*> Users(header->use_begin(), header->use_end());
+  for (unsigned i = 0, e = Users.size(); i != e; ++i)
+    // The BasicBlock which contains the branch is not in the region
+    // modify the branch target to a new block
+    if (TerminatorInst *TI = dyn_cast<TerminatorInst>(Users[i]))
+      if (!Blocks.count(TI->getParent()) &&
+          TI->getParent()->getParent() == oldFunction)
+        TI->replaceUsesOfWith(header, newHeader);
+
+  return newFunction;
+}
+
+/// FindPhiPredForUseInBlock - Given a value and a basic block, find a PHI
+/// that uses the value within the basic block, and return the predecessor
+/// block associated with that use, or return 0 if none is found.
+static BasicBlock* FindPhiPredForUseInBlock(Value* Used, BasicBlock* BB) {
+  for (Value::use_iterator UI = Used->use_begin(),
+       UE = Used->use_end(); UI != UE; ++UI) {
+     PHINode *P = dyn_cast<PHINode>(*UI);
+     if (P && P->getParent() == BB)
+       return P->getIncomingBlock(UI);
+  }
+  
+  return 0;
+}
+
+/// emitCallAndSwitchStatement - This method sets up the caller side by adding
+/// the call instruction, splitting any PHI nodes in the header block as
+/// necessary.
+void CodeExtractor::
+emitCallAndSwitchStatement(Function *newFunction, BasicBlock *codeReplacer,
+                           ValueSet &inputs, ValueSet &outputs) {
+  // Emit a call to the new function, passing in: *pointer to struct (if
+  // aggregating parameters), or plan inputs and allocated memory for outputs
+  std::vector<Value*> params, StructValues, ReloadOutputs, Reloads;
+  
+  LLVMContext &Context = newFunction->getContext();
+
+  // Add inputs as params, or to be filled into the struct
+  for (ValueSet::iterator i = inputs.begin(), e = inputs.end(); i != e; ++i)
+    if (AggregateArgs)
+      StructValues.push_back(*i);
+    else
+      params.push_back(*i);
+
+  // Create allocas for the outputs
+  for (ValueSet::iterator i = outputs.begin(), e = outputs.end(); i != e; ++i) {
+    if (AggregateArgs) {
+      StructValues.push_back(*i);
+    } else {
+      AllocaInst *alloca =
+        new AllocaInst((*i)->getType(), 0, (*i)->getName()+".loc",
+                       codeReplacer->getParent()->begin()->begin());
+      ReloadOutputs.push_back(alloca);
+      params.push_back(alloca);
+    }
+  }
+
+  AllocaInst *Struct = 0;
+  if (AggregateArgs && (inputs.size() + outputs.size() > 0)) {
+    std::vector<Type*> ArgTypes;
+    for (ValueSet::iterator v = StructValues.begin(),
+           ve = StructValues.end(); v != ve; ++v)
+      ArgTypes.push_back((*v)->getType());
+
+    // Allocate a struct at the beginning of this function
+    Type *StructArgTy = StructType::get(newFunction->getContext(), ArgTypes);
+    Struct =
+      new AllocaInst(StructArgTy, 0, "structArg",
+                     codeReplacer->getParent()->begin()->begin());
+    params.push_back(Struct);
+
+    for (unsigned i = 0, e = inputs.size(); i != e; ++i) {
+      Value *Idx[2];
+      Idx[0] = Constant::getNullValue(Type::getInt32Ty(Context));
+      Idx[1] = ConstantInt::get(Type::getInt32Ty(Context), i);
+      GetElementPtrInst *GEP =
+        GetElementPtrInst::Create(Struct, Idx,
+                                  "gep_" + StructValues[i]->getName());
+      codeReplacer->getInstList().push_back(GEP);
+      StoreInst *SI = new StoreInst(StructValues[i], GEP);
+      codeReplacer->getInstList().push_back(SI);
+    }
+  }
+
+  // Emit the call to the function
+  CallInst *call = CallInst::Create(newFunction, params,
+                                    NumExitBlocks > 1 ? "targetBlock" : "");
+  codeReplacer->getInstList().push_back(call);
+
+  Function::arg_iterator OutputArgBegin = newFunction->arg_begin();
+  unsigned FirstOut = inputs.size();
+  if (!AggregateArgs)
+    std::advance(OutputArgBegin, inputs.size());
+
+  // Reload the outputs passed in by reference
+  for (unsigned i = 0, e = outputs.size(); i != e; ++i) {
+    Value *Output = 0;
+    if (AggregateArgs) {
+      Value *Idx[2];
+      Idx[0] = Constant::getNullValue(Type::getInt32Ty(Context));
+      Idx[1] = ConstantInt::get(Type::getInt32Ty(Context), FirstOut + i);
+      GetElementPtrInst *GEP
+        = GetElementPtrInst::Create(Struct, Idx,
+                                    "gep_reload_" + outputs[i]->getName());
+      codeReplacer->getInstList().push_back(GEP);
+      Output = GEP;
+    } else {
+      Output = ReloadOutputs[i];
+    }
+    LoadInst *load = new LoadInst(Output, outputs[i]->getName()+".reload");
+    Reloads.push_back(load);
+    codeReplacer->getInstList().push_back(load);
+    std::vector<User*> Users(outputs[i]->use_begin(), outputs[i]->use_end());
+    for (unsigned u = 0, e = Users.size(); u != e; ++u) {
+      Instruction *inst = cast<Instruction>(Users[u]);
+      if (!Blocks.count(inst->getParent()))
+        inst->replaceUsesOfWith(outputs[i], load);
+    }
+  }
+
+  // Now we can emit a switch statement using the call as a value.
+  SwitchInst *TheSwitch =
+      SwitchInst::Create(Constant::getNullValue(Type::getInt16Ty(Context)),
+                         codeReplacer, 0, codeReplacer);
+
+  // Since there may be multiple exits from the original region, make the new
+  // function return an unsigned, switch on that number.  This loop iterates
+  // over all of the blocks in the extracted region, updating any terminator
+  // instructions in the to-be-extracted region that branch to blocks that are
+  // not in the region to be extracted.
+  std::map<BasicBlock*, BasicBlock*> ExitBlockMap;
+
+  unsigned switchVal = 0;
+  for (SetVector<BasicBlock*>::const_iterator i = Blocks.begin(),
+         e = Blocks.end(); i != e; ++i) {
+    TerminatorInst *TI = (*i)->getTerminator();
+    for (unsigned i = 0, e = TI->getNumSuccessors(); i != e; ++i)
+      if (!Blocks.count(TI->getSuccessor(i))) {
+        BasicBlock *OldTarget = TI->getSuccessor(i);
+        // add a new basic block which returns the appropriate value
+        BasicBlock *&NewTarget = ExitBlockMap[OldTarget];
+        if (!NewTarget) {
+          // If we don't already have an exit stub for this non-extracted
+          // destination, create one now!
+          NewTarget = BasicBlock::Create(Context,
+                                         OldTarget->getName() + ".exitStub",
+                                         newFunction);
+          unsigned SuccNum = switchVal++;
+
+          Value *brVal = 0;
+          switch (NumExitBlocks) {
+          case 0:
+          case 1: break;  // No value needed.
+          case 2:         // Conditional branch, return a bool
+            brVal = ConstantInt::get(Type::getInt1Ty(Context), !SuccNum);
+            break;
+          default:
+            brVal = ConstantInt::get(Type::getInt16Ty(Context), SuccNum);
+            break;
+          }
+
+          ReturnInst *NTRet = ReturnInst::Create(Context, brVal, NewTarget);
+
+          // Update the switch instruction.
+          TheSwitch->addCase(ConstantInt::get(Type::getInt16Ty(Context),
+                                              SuccNum),
+                             OldTarget);
+
+          // Restore values just before we exit
+          Function::arg_iterator OAI = OutputArgBegin;
+          for (unsigned out = 0, e = outputs.size(); out != e; ++out) {
+            // For an invoke, the normal destination is the only one that is
+            // dominated by the result of the invocation
+            BasicBlock *DefBlock = cast<Instruction>(outputs[out])->getParent();
+
+            bool DominatesDef = true;
+
+            if (InvokeInst *Invoke = dyn_cast<InvokeInst>(outputs[out])) {
+              DefBlock = Invoke->getNormalDest();
+
+              // Make sure we are looking at the original successor block, not
+              // at a newly inserted exit block, which won't be in the dominator
+              // info.
+              for (std::map<BasicBlock*, BasicBlock*>::iterator I =
+                     ExitBlockMap.begin(), E = ExitBlockMap.end(); I != E; ++I)
+                if (DefBlock == I->second) {
+                  DefBlock = I->first;
+                  break;
+                }
+
+              // In the extract block case, if the block we are extracting ends
+              // with an invoke instruction, make sure that we don't emit a
+              // store of the invoke value for the unwind block.
+              if (!DT && DefBlock != OldTarget)
+                DominatesDef = false;
+            }
+
+            if (DT) {
+              DominatesDef = DT->dominates(DefBlock, OldTarget);
+              
+              // If the output value is used by a phi in the target block,
+              // then we need to test for dominance of the phi's predecessor
+              // instead.  Unfortunately, this a little complicated since we
+              // have already rewritten uses of the value to uses of the reload.
+              BasicBlock* pred = FindPhiPredForUseInBlock(Reloads[out], 
+                                                          OldTarget);
+              if (pred && DT && DT->dominates(DefBlock, pred))
+                DominatesDef = true;
+            }
+
+            if (DominatesDef) {
+              if (AggregateArgs) {
+                Value *Idx[2];
+                Idx[0] = Constant::getNullValue(Type::getInt32Ty(Context));
+                Idx[1] = ConstantInt::get(Type::getInt32Ty(Context),
+                                          FirstOut+out);
+                GetElementPtrInst *GEP =
+                  GetElementPtrInst::Create(OAI, Idx,
+                                            "gep_" + outputs[out]->getName(),
+                                            NTRet);
+                new StoreInst(outputs[out], GEP, NTRet);
+              } else {
+                new StoreInst(outputs[out], OAI, NTRet);
+              }
+            }
+            // Advance output iterator even if we don't emit a store
+            if (!AggregateArgs) ++OAI;
+          }
+        }
+
+        // rewrite the original branch instruction with this new target
+        TI->setSuccessor(i, NewTarget);
+      }
+  }
+
+  // Now that we've done the deed, simplify the switch instruction.
+  Type *OldFnRetTy = TheSwitch->getParent()->getParent()->getReturnType();
+  switch (NumExitBlocks) {
+  case 0:
+    // There are no successors (the block containing the switch itself), which
+    // means that previously this was the last part of the function, and hence
+    // this should be rewritten as a `ret'
+
+    // Check if the function should return a value
+    if (OldFnRetTy->isVoidTy()) {
+      ReturnInst::Create(Context, 0, TheSwitch);  // Return void
+    } else if (OldFnRetTy == TheSwitch->getCondition()->getType()) {
+      // return what we have
+      ReturnInst::Create(Context, TheSwitch->getCondition(), TheSwitch);
+    } else {
+      // Otherwise we must have code extracted an unwind or something, just
+      // return whatever we want.
+      ReturnInst::Create(Context, 
+                         Constant::getNullValue(OldFnRetTy), TheSwitch);
+    }
+
+    TheSwitch->eraseFromParent();
+    break;
+  case 1:
+    // Only a single destination, change the switch into an unconditional
+    // branch.
+    BranchInst::Create(TheSwitch->getSuccessor(1), TheSwitch);
+    TheSwitch->eraseFromParent();
+    break;
+  case 2:
+    BranchInst::Create(TheSwitch->getSuccessor(1), TheSwitch->getSuccessor(2),
+                       call, TheSwitch);
+    TheSwitch->eraseFromParent();
+    break;
+  default:
+    // Otherwise, make the default destination of the switch instruction be one
+    // of the other successors.
+    TheSwitch->setCondition(call);
+    TheSwitch->setDefaultDest(TheSwitch->getSuccessor(NumExitBlocks));
+    // Remove redundant case
+    TheSwitch->removeCase(SwitchInst::CaseIt(TheSwitch, NumExitBlocks-1));
+    break;
+  }
+}
+
+void CodeExtractor::moveCodeToFunction(Function *newFunction) {
+  Function *oldFunc = (*Blocks.begin())->getParent();
+  Function::BasicBlockListType &oldBlocks = oldFunc->getBasicBlockList();
+  Function::BasicBlockListType &newBlocks = newFunction->getBasicBlockList();
+
+  for (SetVector<BasicBlock*>::const_iterator i = Blocks.begin(),
+         e = Blocks.end(); i != e; ++i) {
+    // Delete the basic block from the old function, and the list of blocks
+    oldBlocks.remove(*i);
+
+    // Insert this basic block into the new function
+    newBlocks.push_back(*i);
+  }
+}
+
+Function *CodeExtractor::extractCodeRegion() {
+  if (!isEligible())
+    return 0;
+
+  ValueSet inputs, outputs;
+
+  // Assumption: this is a single-entry code region, and the header is the first
+  // block in the region.
+  BasicBlock *header = *Blocks.begin();
+
+  // If we have to split PHI nodes or the entry block, do so now.
+  severSplitPHINodes(header);
+
+  // If we have any return instructions in the region, split those blocks so
+  // that the return is not in the region.
+  splitReturnBlocks();
+
+  Function *oldFunction = header->getParent();
+
+  // This takes place of the original loop
+  BasicBlock *codeReplacer = BasicBlock::Create(header->getContext(), 
+                                                "codeRepl", oldFunction,
+                                                header);
+
+  // The new function needs a root node because other nodes can branch to the
+  // head of the region, but the entry node of a function cannot have preds.
+  BasicBlock *newFuncRoot = BasicBlock::Create(header->getContext(), 
+                                               "newFuncRoot");
+  newFuncRoot->getInstList().push_back(BranchInst::Create(header));
+
+  // Find inputs to, outputs from the code region.
+  findInputsOutputs(inputs, outputs);
+
+  SmallPtrSet<BasicBlock *, 1> ExitBlocks;
+  for (SetVector<BasicBlock *>::iterator I = Blocks.begin(), E = Blocks.end();
+       I != E; ++I)
+    for (succ_iterator SI = succ_begin(*I), SE = succ_end(*I); SI != SE; ++SI)
+      if (!Blocks.count(*SI))
+        ExitBlocks.insert(*SI);
+  NumExitBlocks = ExitBlocks.size();
+
+  // Construct new function based on inputs/outputs & add allocas for all defs.
+  Function *newFunction = constructFunction(inputs, outputs, header,
+                                            newFuncRoot,
+                                            codeReplacer, oldFunction,
+                                            oldFunction->getParent());
+
+  emitCallAndSwitchStatement(newFunction, codeReplacer, inputs, outputs);
+
+  moveCodeToFunction(newFunction);
+
+  // Loop over all of the PHI nodes in the header block, and change any
+  // references to the old incoming edge to be the new incoming edge.
+  for (BasicBlock::iterator I = header->begin(); isa<PHINode>(I); ++I) {
+    PHINode *PN = cast<PHINode>(I);
+    for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+      if (!Blocks.count(PN->getIncomingBlock(i)))
+        PN->setIncomingBlock(i, newFuncRoot);
+  }
+
+  // Look at all successors of the codeReplacer block.  If any of these blocks
+  // had PHI nodes in them, we need to update the "from" block to be the code
+  // replacer, not the original block in the extracted region.
+  std::vector<BasicBlock*> Succs(succ_begin(codeReplacer),
+                                 succ_end(codeReplacer));
+  for (unsigned i = 0, e = Succs.size(); i != e; ++i)
+    for (BasicBlock::iterator I = Succs[i]->begin(); isa<PHINode>(I); ++I) {
+      PHINode *PN = cast<PHINode>(I);
+      std::set<BasicBlock*> ProcessedPreds;
+      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
+        if (Blocks.count(PN->getIncomingBlock(i))) {
+          if (ProcessedPreds.insert(PN->getIncomingBlock(i)).second)
+            PN->setIncomingBlock(i, codeReplacer);
+          else {
+            // There were multiple entries in the PHI for this block, now there
+            // is only one, so remove the duplicated entries.
+            PN->removeIncomingValue(i, false);
+            --i; --e;
+          }
+        }
+    }
+
+  //cerr << "NEW FUNCTION: " << *newFunction;
+  //  verifyFunction(*newFunction);
+
+  //  cerr << "OLD FUNCTION: " << *oldFunction;
+  //  verifyFunction(*oldFunction);
+
+  DEBUG(if (verifyFunction(*newFunction)) 
+        report_fatal_error("verifyFunction failed!"));
+  return newFunction;
+}
+//===- InlineFunction.cpp - Code to perform function inlining -------------===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements inlining of a function into a call site, resolving
+// parameters and the return value as appropriate.
+//
+//===----------------------------------------------------------------------===//
+
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/DebugInfo.h"
+#include "llvm/IR/Attributes.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/Module.h"
+#include "llvm/Support/CallSite.h"
+#include "llvm/Transforms/Utils/Local.h"
+using namespace llvm;
+
+bool llvm::InlineFunction(CallInst *CI, InlineFunctionInfo &IFI,
+                          bool InsertLifetime) {
+  return InlineFunction(CallSite(CI), IFI, InsertLifetime);
+}
+bool llvm::InlineFunction(InvokeInst *II, InlineFunctionInfo &IFI,
+                          bool InsertLifetime) {
+  return InlineFunction(CallSite(II), IFI, InsertLifetime);
+}
+
+namespace {
+  /// A class for recording information about inlining through an invoke.
+  class InvokeInliningInfo {
+    BasicBlock *OuterResumeDest; ///< Destination of the invoke's unwind.
+    BasicBlock *InnerResumeDest; ///< Destination for the callee's resume.
+    LandingPadInst *CallerLPad;  ///< LandingPadInst associated with the invoke.
+    PHINode *InnerEHValuesPHI;   ///< PHI for EH values from landingpad insts.
+    SmallVector<Value*, 8> UnwindDestPHIValues;
+
+  public:
+    InvokeInliningInfo(InvokeInst *II)
+      : OuterResumeDest(II->getUnwindDest()), InnerResumeDest(0),
+        CallerLPad(0), InnerEHValuesPHI(0) {
+      // If there are PHI nodes in the unwind destination block, we need to keep
+      // track of which values came into them from the invoke before removing
+      // the edge from this block.
+      llvm::BasicBlock *InvokeBB = II->getParent();
+      BasicBlock::iterator I = OuterResumeDest->begin();
+      for (; isa<PHINode>(I); ++I) {
+        // Save the value to use for this edge.
+        PHINode *PHI = cast<PHINode>(I);
+        UnwindDestPHIValues.push_back(PHI->getIncomingValueForBlock(InvokeBB));
+      }
+
+      CallerLPad = cast<LandingPadInst>(I);
+    }
+
+    /// getOuterResumeDest - The outer unwind destination is the target of
+    /// unwind edges introduced for calls within the inlined function.
+    BasicBlock *getOuterResumeDest() const {
+      return OuterResumeDest;
+    }
+
+    BasicBlock *getInnerResumeDest();
+
+    LandingPadInst *getLandingPadInst() const { return CallerLPad; }
+
+    /// forwardResume - Forward the 'resume' instruction to the caller's landing
+    /// pad block. When the landing pad block has only one predecessor, this is
+    /// a simple branch. When there is more than one predecessor, we need to
+    /// split the landing pad block after the landingpad instruction and jump
+    /// to there.
+    void forwardResume(ResumeInst *RI,
+                       SmallPtrSet<LandingPadInst*, 16> &InlinedLPads);
+
+    /// addIncomingPHIValuesFor - Add incoming-PHI values to the unwind
+    /// destination block for the given basic block, using the values for the
+    /// original invoke's source block.
+    void addIncomingPHIValuesFor(BasicBlock *BB) const {
+      addIncomingPHIValuesForInto(BB, OuterResumeDest);
+    }
+
+    void addIncomingPHIValuesForInto(BasicBlock *src, BasicBlock *dest) const {
+      BasicBlock::iterator I = dest->begin();
+      for (unsigned i = 0, e = UnwindDestPHIValues.size(); i != e; ++i, ++I) {
+        PHINode *phi = cast<PHINode>(I);
+        phi->addIncoming(UnwindDestPHIValues[i], src);
+      }
+    }
+  };
+}
+
+/// getInnerResumeDest - Get or create a target for the branch from ResumeInsts.
+BasicBlock *InvokeInliningInfo::getInnerResumeDest() {
+  if (InnerResumeDest) return InnerResumeDest;
+
+  // Split the landing pad.
+  BasicBlock::iterator SplitPoint = CallerLPad; ++SplitPoint;
+  InnerResumeDest =
+    OuterResumeDest->splitBasicBlock(SplitPoint,
+                                     OuterResumeDest->getName() + ".body");
+
+  // The number of incoming edges we expect to the inner landing pad.
+  const unsigned PHICapacity = 2;
+
+  // Create corresponding new PHIs for all the PHIs in the outer landing pad.
+  BasicBlock::iterator InsertPoint = InnerResumeDest->begin();
+  BasicBlock::iterator I = OuterResumeDest->begin();
+  for (unsigned i = 0, e = UnwindDestPHIValues.size(); i != e; ++i, ++I) {
+    PHINode *OuterPHI = cast<PHINode>(I);
+    PHINode *InnerPHI = PHINode::Create(OuterPHI->getType(), PHICapacity,
+                                        OuterPHI->getName() + ".lpad-body",
+                                        InsertPoint);
+    OuterPHI->replaceAllUsesWith(InnerPHI);
+    InnerPHI->addIncoming(OuterPHI, OuterResumeDest);
+  }
+
+  // Create a PHI for the exception values.
+  InnerEHValuesPHI = PHINode::Create(CallerLPad->getType(), PHICapacity,
+                                     "eh.lpad-body", InsertPoint);
+  CallerLPad->replaceAllUsesWith(InnerEHValuesPHI);
+  InnerEHValuesPHI->addIncoming(CallerLPad, OuterResumeDest);
+
+  // All done.
+  return InnerResumeDest;
+}
+
+/// forwardResume - Forward the 'resume' instruction to the caller's landing pad
+/// block. When the landing pad block has only one predecessor, this is a simple
+/// branch. When there is more than one predecessor, we need to split the
+/// landing pad block after the landingpad instruction and jump to there.
+void InvokeInliningInfo::forwardResume(ResumeInst *RI,
+                               SmallPtrSet<LandingPadInst*, 16> &InlinedLPads) {
+  BasicBlock *Dest = getInnerResumeDest();
+  LandingPadInst *OuterLPad = getLandingPadInst();
+  BasicBlock *Src = RI->getParent();
+
+  BranchInst::Create(Dest, Src);
+
+  // Update the PHIs in the destination. They were inserted in an order which
+  // makes this work.
+  addIncomingPHIValuesForInto(Src, Dest);
+
+  InnerEHValuesPHI->addIncoming(RI->getOperand(0), Src);
+  RI->eraseFromParent();
+
+  // Append the clauses from the outer landing pad instruction into the inlined
+  // landing pad instructions.
+  for (SmallPtrSet<LandingPadInst*, 16>::iterator I = InlinedLPads.begin(),
+         E = InlinedLPads.end(); I != E; ++I) {
+    LandingPadInst *InlinedLPad = *I;
+    for (unsigned OuterIdx = 0, OuterNum = OuterLPad->getNumClauses();
+         OuterIdx != OuterNum; ++OuterIdx)
+      InlinedLPad->addClause(OuterLPad->getClause(OuterIdx));
+  }
+}
+
+/// HandleCallsInBlockInlinedThroughInvoke - When we inline a basic block into
+/// an invoke, we have to turn all of the calls that can throw into
+/// invokes.  This function analyze BB to see if there are any calls, and if so,
+/// it rewrites them to be invokes that jump to InvokeDest and fills in the PHI
+/// nodes in that block with the values specified in InvokeDestPHIValues.
+///
+/// Returns true to indicate that the next block should be skipped.
+static bool HandleCallsInBlockInlinedThroughInvoke(BasicBlock *BB,
+                                                   InvokeInliningInfo &Invoke) {
+  LandingPadInst *LPI = Invoke.getLandingPadInst();
+
+  for (BasicBlock::iterator BBI = BB->begin(), E = BB->end(); BBI != E; ) {
+    Instruction *I = BBI++;
+
+    if (LandingPadInst *L = dyn_cast<LandingPadInst>(I)) {
+      unsigned NumClauses = LPI->getNumClauses();
+      L->reserveClauses(NumClauses);
+      for (unsigned i = 0; i != NumClauses; ++i)
+        L->addClause(LPI->getClause(i));
+    }
+
+    // We only need to check for function calls: inlined invoke
+    // instructions require no special handling.
+    CallInst *CI = dyn_cast<CallInst>(I);
+
+    // If this call cannot unwind, don't convert it to an invoke.
+    // Inline asm calls cannot throw.
+    if (!CI || CI->doesNotThrow() || isa<InlineAsm>(CI->getCalledValue()))
+      continue;
+
+    // Convert this function call into an invoke instruction.  First, split the
+    // basic block.
+    BasicBlock *Split = BB->splitBasicBlock(CI, CI->getName()+".noexc");
+
+    // Delete the unconditional branch inserted by splitBasicBlock
+    BB->getInstList().pop_back();
+
+    // Create the new invoke instruction.
+    ImmutableCallSite CS(CI);
+    SmallVector<Value*, 8> InvokeArgs(CS.arg_begin(), CS.arg_end());
+    InvokeInst *II = InvokeInst::Create(CI->getCalledValue(), Split,
+                                        Invoke.getOuterResumeDest(),
+                                        InvokeArgs, CI->getName(), BB);
+    II->setCallingConv(CI->getCallingConv());
+    II->setAttributes(CI->getAttributes());
+    
+    // Make sure that anything using the call now uses the invoke!  This also
+    // updates the CallGraph if present, because it uses a WeakVH.
+    CI->replaceAllUsesWith(II);
+
+    // Delete the original call
+    Split->getInstList().pop_front();
+
+    // Update any PHI nodes in the exceptional block to indicate that there is
+    // now a new entry in them.
+    Invoke.addIncomingPHIValuesFor(BB);
+    return false;
+  }
+
+  return false;
+}
+
+/// HandleInlinedInvoke - If we inlined an invoke site, we need to convert calls
+/// in the body of the inlined function into invokes.
+///
+/// II is the invoke instruction being inlined.  FirstNewBlock is the first
+/// block of the inlined code (the last block is the end of the function),
+/// and InlineCodeInfo is information about the code that got inlined.
+static void HandleInlinedInvoke(InvokeInst *II, BasicBlock *FirstNewBlock,
+                                ClonedCodeInfo &InlinedCodeInfo) {
+  BasicBlock *InvokeDest = II->getUnwindDest();
+
+  Function *Caller = FirstNewBlock->getParent();
+
+  // The inlined code is currently at the end of the function, scan from the
+  // start of the inlined code to its end, checking for stuff we need to
+  // rewrite.
+  InvokeInliningInfo Invoke(II);
+
+  // Get all of the inlined landing pad instructions.
+  SmallPtrSet<LandingPadInst*, 16> InlinedLPads;
+  for (Function::iterator I = FirstNewBlock, E = Caller->end(); I != E; ++I)
+    if (InvokeInst *II = dyn_cast<InvokeInst>(I->getTerminator()))
+      InlinedLPads.insert(II->getLandingPadInst());
+
+  for (Function::iterator BB = FirstNewBlock, E = Caller->end(); BB != E; ++BB){
+    if (InlinedCodeInfo.ContainsCalls)
+      if (HandleCallsInBlockInlinedThroughInvoke(BB, Invoke)) {
+        // Honor a request to skip the next block.
+        ++BB;
+        continue;
+      }
+
+    // Forward any resumes that are remaining here.
+    if (ResumeInst *RI = dyn_cast<ResumeInst>(BB->getTerminator()))
+      Invoke.forwardResume(RI, InlinedLPads);
+  }
+
+  // Now that everything is happy, we have one final detail.  The PHI nodes in
+  // the exception destination block still have entries due to the original
+  // invoke instruction. Eliminate these entries (which might even delete the
+  // PHI node) now.
+  InvokeDest->removePredecessor(II->getParent());
+}
+
+/// UpdateCallGraphAfterInlining - Once we have cloned code over from a callee
+/// into the caller, update the specified callgraph to reflect the changes we
+/// made.  Note that it's possible that not all code was copied over, so only
+/// some edges of the callgraph may remain.
+static void UpdateCallGraphAfterInlining(CallSite CS,
+                                         Function::iterator FirstNewBlock,
+                                         ValueToValueMapTy &VMap,
+                                         InlineFunctionInfo &IFI) {
+  CallGraph &CG = *IFI.CG;
+  const Function *Caller = CS.getInstruction()->getParent()->getParent();
+  const Function *Callee = CS.getCalledFunction();
+  CallGraphNode *CalleeNode = CG[Callee];
+  CallGraphNode *CallerNode = CG[Caller];
+
+  // Since we inlined some uninlined call sites in the callee into the caller,
+  // add edges from the caller to all of the callees of the callee.
+  CallGraphNode::iterator I = CalleeNode->begin(), E = CalleeNode->end();
+
+  // Consider the case where CalleeNode == CallerNode.
+  CallGraphNode::CalledFunctionsVector CallCache;
+  if (CalleeNode == CallerNode) {
+    CallCache.assign(I, E);
+    I = CallCache.begin();
+    E = CallCache.end();
+  }
+
+  for (; I != E; ++I) {
+    const Value *OrigCall = I->first;
+
+    ValueToValueMapTy::iterator VMI = VMap.find(OrigCall);
+    // Only copy the edge if the call was inlined!
+    if (VMI == VMap.end() || VMI->second == 0)
+      continue;
+    
+    // If the call was inlined, but then constant folded, there is no edge to
+    // add.  Check for this case.
+    Instruction *NewCall = dyn_cast<Instruction>(VMI->second);
+    if (NewCall == 0) continue;
+
+    // Remember that this call site got inlined for the client of
+    // InlineFunction.
+    IFI.InlinedCalls.push_back(NewCall);
+
+    // It's possible that inlining the callsite will cause it to go from an
+    // indirect to a direct call by resolving a function pointer.  If this
+    // happens, set the callee of the new call site to a more precise
+    // destination.  This can also happen if the call graph node of the caller
+    // was just unnecessarily imprecise.
+    if (I->second->getFunction() == 0)
+      if (Function *F = CallSite(NewCall).getCalledFunction()) {
+        // Indirect call site resolved to direct call.
+        CallerNode->addCalledFunction(CallSite(NewCall), CG[F]);
+
+        continue;
+      }
+
+    CallerNode->addCalledFunction(CallSite(NewCall), I->second);
+  }
+  
+  // Update the call graph by deleting the edge from Callee to Caller.  We must
+  // do this after the loop above in case Caller and Callee are the same.
+  CallerNode->removeCallEdgeFor(CS);
+}
+
+/// HandleByValArgument - When inlining a call site that has a byval argument,
+/// we have to make the implicit memcpy explicit by adding it.
+static Value *HandleByValArgument(Value *Arg, Instruction *TheCall,
+                                  const Function *CalledFunc,
+                                  InlineFunctionInfo &IFI,
+                                  unsigned ByValAlignment) {
+  Type *AggTy = cast<PointerType>(Arg->getType())->getElementType();
+
+  // If the called function is readonly, then it could not mutate the caller's
+  // copy of the byval'd memory.  In this case, it is safe to elide the copy and
+  // temporary.
+  if (CalledFunc->onlyReadsMemory()) {
+    // If the byval argument has a specified alignment that is greater than the
+    // passed in pointer, then we either have to round up the input pointer or
+    // give up on this transformation.
+    if (ByValAlignment <= 1)  // 0 = unspecified, 1 = no particular alignment.
+      return Arg;
+
+    // If the pointer is already known to be sufficiently aligned, or if we can
+    // round it up to a larger alignment, then we don't need a temporary.
+    if (getOrEnforceKnownAlignment(Arg, ByValAlignment,
+                                   IFI.TD) >= ByValAlignment)
+      return Arg;
+    
+    // Otherwise, we have to make a memcpy to get a safe alignment.  This is bad
+    // for code quality, but rarely happens and is required for correctness.
+  }
+  
+  LLVMContext &Context = Arg->getContext();
+
+  Type *VoidPtrTy = Type::getInt8PtrTy(Context);
+  
+  // Create the alloca.  If we have DataLayout, use nice alignment.
+  unsigned Align = 1;
+  if (IFI.TD)
+    Align = IFI.TD->getPrefTypeAlignment(AggTy);
+  
+  // If the byval had an alignment specified, we *must* use at least that
+  // alignment, as it is required by the byval argument (and uses of the
+  // pointer inside the callee).
+  Align = std::max(Align, ByValAlignment);
+  
+  Function *Caller = TheCall->getParent()->getParent(); 
+  
+  Value *NewAlloca = new AllocaInst(AggTy, 0, Align, Arg->getName(), 
+                                    &*Caller->begin()->begin());
+  // Emit a memcpy.
+  Type *Tys[3] = {VoidPtrTy, VoidPtrTy, Type::getInt64Ty(Context)};
+  Function *MemCpyFn = Intrinsic::getDeclaration(Caller->getParent(),
+                                                 Intrinsic::memcpy, 
+                                                 Tys);
+  Value *DestCast = new BitCastInst(NewAlloca, VoidPtrTy, "tmp", TheCall);
+  Value *SrcCast = new BitCastInst(Arg, VoidPtrTy, "tmp", TheCall);
+  
+  Value *Size;
+  if (IFI.TD == 0)
+    Size = ConstantExpr::getSizeOf(AggTy);
+  else
+    Size = ConstantInt::get(Type::getInt64Ty(Context),
+                            IFI.TD->getTypeStoreSize(AggTy));
+  
+  // Always generate a memcpy of alignment 1 here because we don't know
+  // the alignment of the src pointer.  Other optimizations can infer
+  // better alignment.
+  Value *CallArgs[] = {
+    DestCast, SrcCast, Size,
+    ConstantInt::get(Type::getInt32Ty(Context), 1),
+    ConstantInt::getFalse(Context) // isVolatile
+  };
+  IRBuilder<>(TheCall).CreateCall(MemCpyFn, CallArgs);
+  
+  // Uses of the argument in the function should use our new alloca
+  // instead.
+  return NewAlloca;
+}
+
+// isUsedByLifetimeMarker - Check whether this Value is used by a lifetime
+// intrinsic.
+static bool isUsedByLifetimeMarker(Value *V) {
+  for (Value::use_iterator UI = V->use_begin(), UE = V->use_end(); UI != UE;
+       ++UI) {
+    if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(*UI)) {
+      switch (II->getIntrinsicID()) {
+      default: break;
+      case Intrinsic::lifetime_start:
+      case Intrinsic::lifetime_end:
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// hasLifetimeMarkers - Check whether the given alloca already has
+// lifetime.start or lifetime.end intrinsics.
+static bool hasLifetimeMarkers(AllocaInst *AI) {
+  Type *Int8PtrTy = Type::getInt8PtrTy(AI->getType()->getContext());
+  if (AI->getType() == Int8PtrTy)
+    return isUsedByLifetimeMarker(AI);
+
+  // Do a scan to find all the casts to i8*.
+  for (Value::use_iterator I = AI->use_begin(), E = AI->use_end(); I != E;
+       ++I) {
+    if (I->getType() != Int8PtrTy) continue;
+    if (I->stripPointerCasts() != AI) continue;
+    if (isUsedByLifetimeMarker(*I))
+      return true;
+  }
+  return false;
+}
+
+/// updateInlinedAtInfo - Helper function used by fixupLineNumbers to
+/// recursively update InlinedAtEntry of a DebugLoc.
+static DebugLoc updateInlinedAtInfo(const DebugLoc &DL, 
+                                    const DebugLoc &InlinedAtDL,
+                                    LLVMContext &Ctx) {
+  if (MDNode *IA = DL.getInlinedAt(Ctx)) {
+    DebugLoc NewInlinedAtDL 
+      = updateInlinedAtInfo(DebugLoc::getFromDILocation(IA), InlinedAtDL, Ctx);
+    return DebugLoc::get(DL.getLine(), DL.getCol(), DL.getScope(Ctx),
+                         NewInlinedAtDL.getAsMDNode(Ctx));
+  }
+
+  return DebugLoc::get(DL.getLine(), DL.getCol(), DL.getScope(Ctx),
+                       InlinedAtDL.getAsMDNode(Ctx));
+}
+
+/// fixupLineNumbers - Update inlined instructions' line numbers to 
+/// to encode location where these instructions are inlined.
+static void fixupLineNumbers(Function *Fn, Function::iterator FI,
+                             Instruction *TheCall) {
+  DebugLoc TheCallDL = TheCall->getDebugLoc();
+  if (TheCallDL.isUnknown())
+    return;
+
+  for (; FI != Fn->end(); ++FI) {
+    for (BasicBlock::iterator BI = FI->begin(), BE = FI->end();
+         BI != BE; ++BI) {
+      DebugLoc DL = BI->getDebugLoc();
+      if (!DL.isUnknown()) {
+        BI->setDebugLoc(updateInlinedAtInfo(DL, TheCallDL, BI->getContext()));
+        if (DbgValueInst *DVI = dyn_cast<DbgValueInst>(BI)) {
+          LLVMContext &Ctx = BI->getContext();
+          MDNode *InlinedAt = BI->getDebugLoc().getInlinedAt(Ctx);
+          DVI->setOperand(2, createInlinedVariable(DVI->getVariable(), 
+                                                   InlinedAt, Ctx));
+        }
+      }
+    }
+  }
+}
+
+/// InlineFunction - This function inlines the called function into the basic
+/// block of the caller.  This returns false if it is not possible to inline
+/// this call.  The program is still in a well defined state if this occurs
+/// though.
+///
+/// Note that this only does one level of inlining.  For example, if the
+/// instruction 'call B' is inlined, and 'B' calls 'C', then the call to 'C' now
+/// exists in the instruction stream.  Similarly this will inline a recursive
+/// function by one level.
+bool llvm::InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
+                          bool InsertLifetime) {
+  Instruction *TheCall = CS.getInstruction();
+  assert(TheCall->getParent() && TheCall->getParent()->getParent() &&
+         "Instruction not in function!");
+
+  // If IFI has any state in it, zap it before we fill it in.
+  IFI.reset();
+  
+  const Function *CalledFunc = CS.getCalledFunction();
+  if (CalledFunc == 0 ||          // Can't inline external function or indirect
+      CalledFunc->isDeclaration() || // call, or call to a vararg function!
+      CalledFunc->getFunctionType()->isVarArg()) return false;
+
+  // If the call to the callee is not a tail call, we must clear the 'tail'
+  // flags on any calls that we inline.
+  bool MustClearTailCallFlags =
+    !(isa<CallInst>(TheCall) && cast<CallInst>(TheCall)->isTailCall());
+
+  // If the call to the callee cannot throw, set the 'nounwind' flag on any
+  // calls that we inline.
+  bool MarkNoUnwind = CS.doesNotThrow();
+
+  BasicBlock *OrigBB = TheCall->getParent();
+  Function *Caller = OrigBB->getParent();
+
+  // GC poses two hazards to inlining, which only occur when the callee has GC:
+  //  1. If the caller has no GC, then the callee's GC must be propagated to the
+  //     caller.
+  //  2. If the caller has a differing GC, it is invalid to inline.
+  if (CalledFunc->hasGC()) {
+    if (!Caller->hasGC())
+      Caller->setGC(CalledFunc->getGC());
+    else if (CalledFunc->getGC() != Caller->getGC())
+      return false;
+  }
+
+  // Get the personality function from the callee if it contains a landing pad.
+  Value *CalleePersonality = 0;
+  for (Function::const_iterator I = CalledFunc->begin(), E = CalledFunc->end();
+       I != E; ++I)
+    if (const InvokeInst *II = dyn_cast<InvokeInst>(I->getTerminator())) {
+      const BasicBlock *BB = II->getUnwindDest();
+      const LandingPadInst *LP = BB->getLandingPadInst();
+      CalleePersonality = LP->getPersonalityFn();
+      break;
+    }
+
+  // Find the personality function used by the landing pads of the caller. If it
+  // exists, then check to see that it matches the personality function used in
+  // the callee.
+  if (CalleePersonality) {
+    for (Function::const_iterator I = Caller->begin(), E = Caller->end();
+         I != E; ++I)
+      if (const InvokeInst *II = dyn_cast<InvokeInst>(I->getTerminator())) {
+        const BasicBlock *BB = II->getUnwindDest();
+        const LandingPadInst *LP = BB->getLandingPadInst();
+
+        // If the personality functions match, then we can perform the
+        // inlining. Otherwise, we can't inline.
+        // TODO: This isn't 100% true. Some personality functions are proper
+        //       supersets of others and can be used in place of the other.
+        if (LP->getPersonalityFn() != CalleePersonality)
+          return false;
+
+        break;
+      }
+  }
+
+  // Get an iterator to the last basic block in the function, which will have
+  // the new function inlined after it.
+  Function::iterator LastBlock = &Caller->back();
+
+  // Make sure to capture all of the return instructions from the cloned
+  // function.
+  SmallVector<ReturnInst*, 8> Returns;
+  ClonedCodeInfo InlinedFunctionInfo;
+  Function::iterator FirstNewBlock;
+
+  { // Scope to destroy VMap after cloning.
+    ValueToValueMapTy VMap;
+
+    assert(CalledFunc->arg_size() == CS.arg_size() &&
+           "No varargs calls can be inlined!");
+
+    // Calculate the vector of arguments to pass into the function cloner, which
+    // matches up the formal to the actual argument values.
+    CallSite::arg_iterator AI = CS.arg_begin();
+    unsigned ArgNo = 0;
+    for (Function::const_arg_iterator I = CalledFunc->arg_begin(),
+         E = CalledFunc->arg_end(); I != E; ++I, ++AI, ++ArgNo) {
+      Value *ActualArg = *AI;
+
+      // When byval arguments actually inlined, we need to make the copy implied
+      // by them explicit.  However, we don't do this if the callee is readonly
+      // or readnone, because the copy would be unneeded: the callee doesn't
+      // modify the struct.
+      if (CS.isByValArgument(ArgNo)) {
+        ActualArg = HandleByValArgument(ActualArg, TheCall, CalledFunc, IFI,
+                                        CalledFunc->getParamAlignment(ArgNo+1));
+ 
+        // Calls that we inline may use the new alloca, so we need to clear
+        // their 'tail' flags if HandleByValArgument introduced a new alloca and
+        // the callee has calls.
+        MustClearTailCallFlags |= ActualArg != *AI;
+      }
+
+      VMap[I] = ActualArg;
+    }
+
+    // We want the inliner to prune the code as it copies.  We would LOVE to
+    // have no dead or constant instructions leftover after inlining occurs
+    // (which can happen, e.g., because an argument was constant), but we'll be
+    // happy with whatever the cloner can do.
+    CloneAndPruneFunctionInto(Caller, CalledFunc, VMap, 
+                              /*ModuleLevelChanges=*/false, Returns, ".i",
+                              &InlinedFunctionInfo, IFI.TD, TheCall);
+
+    // Remember the first block that is newly cloned over.
+    FirstNewBlock = LastBlock; ++FirstNewBlock;
+
+    // Update the callgraph if requested.
+    if (IFI.CG)
+      UpdateCallGraphAfterInlining(CS, FirstNewBlock, VMap, IFI);
+
+    // Update inlined instructions' line number information.
+    fixupLineNumbers(Caller, FirstNewBlock, TheCall);
+  }
+
+  // If there are any alloca instructions in the block that used to be the entry
+  // block for the callee, move them to the entry block of the caller.  First
+  // calculate which instruction they should be inserted before.  We insert the
+  // instructions at the end of the current alloca list.
+  {
+    BasicBlock::iterator InsertPoint = Caller->begin()->begin();
+    for (BasicBlock::iterator I = FirstNewBlock->begin(),
+         E = FirstNewBlock->end(); I != E; ) {
+      AllocaInst *AI = dyn_cast<AllocaInst>(I++);
+      if (AI == 0) continue;
+      
+      // If the alloca is now dead, remove it.  This often occurs due to code
+      // specialization.
+      if (AI->use_empty()) {
+        AI->eraseFromParent();
+        continue;
+      }
+
+      if (!isa<Constant>(AI->getArraySize()))
+        continue;
+      
+      // Keep track of the static allocas that we inline into the caller.
+      IFI.StaticAllocas.push_back(AI);
+      
+      // Scan for the block of allocas that we can move over, and move them
+      // all at once.
+      while (isa<AllocaInst>(I) &&
+             isa<Constant>(cast<AllocaInst>(I)->getArraySize())) {
+        IFI.StaticAllocas.push_back(cast<AllocaInst>(I));
+        ++I;
+      }
+
+      // Transfer all of the allocas over in a block.  Using splice means
+      // that the instructions aren't removed from the symbol table, then
+      // reinserted.
+      Caller->getEntryBlock().getInstList().splice(InsertPoint,
+                                                   FirstNewBlock->getInstList(),
+                                                   AI, I);
+    }
+  }
+
+  // Leave lifetime markers for the static alloca's, scoping them to the
+  // function we just inlined.
+  if (InsertLifetime && !IFI.StaticAllocas.empty()) {
+    IRBuilder<> builder(FirstNewBlock->begin());
+    for (unsigned ai = 0, ae = IFI.StaticAllocas.size(); ai != ae; ++ai) {
+      AllocaInst *AI = IFI.StaticAllocas[ai];
+
+      // If the alloca is already scoped to something smaller than the whole
+      // function then there's no need to add redundant, less accurate markers.
+      if (hasLifetimeMarkers(AI))
+        continue;
+
+      // Try to determine the size of the allocation.
+      ConstantInt *AllocaSize = 0;
+      if (ConstantInt *AIArraySize =
+          dyn_cast<ConstantInt>(AI->getArraySize())) {
+        if (IFI.TD) {
+          Type *AllocaType = AI->getAllocatedType();
+          uint64_t AllocaTypeSize = IFI.TD->getTypeAllocSize(AllocaType);
+          uint64_t AllocaArraySize = AIArraySize->getLimitedValue();
+          assert(AllocaArraySize > 0 && "array size of AllocaInst is zero");
+          // Check that array size doesn't saturate uint64_t and doesn't
+          // overflow when it's multiplied by type size.
+          if (AllocaArraySize != ~0ULL &&
+              UINT64_MAX / AllocaArraySize >= AllocaTypeSize) {
+            AllocaSize = ConstantInt::get(Type::getInt64Ty(AI->getContext()),
+                                          AllocaArraySize * AllocaTypeSize);
+          }
+        }
+      }
+
+      builder.CreateLifetimeStart(AI, AllocaSize);
+      for (unsigned ri = 0, re = Returns.size(); ri != re; ++ri) {
+        IRBuilder<> builder(Returns[ri]);
+        builder.CreateLifetimeEnd(AI, AllocaSize);
+      }
+    }
+  }
+
+  // If the inlined code contained dynamic alloca instructions, wrap the inlined
+  // code with llvm.stacksave/llvm.stackrestore intrinsics.
+  if (InlinedFunctionInfo.ContainsDynamicAllocas) {
+    Module *M = Caller->getParent();
+    // Get the two intrinsics we care about.
+    Function *StackSave = Intrinsic::getDeclaration(M, Intrinsic::stacksave);
+    Function *StackRestore=Intrinsic::getDeclaration(M,Intrinsic::stackrestore);
+
+    // Insert the llvm.stacksave.
+    CallInst *SavedPtr = IRBuilder<>(FirstNewBlock, FirstNewBlock->begin())
+      .CreateCall(StackSave, "savedstack");
+
+    // Insert a call to llvm.stackrestore before any return instructions in the
+    // inlined function.
+    for (unsigned i = 0, e = Returns.size(); i != e; ++i) {
+      IRBuilder<>(Returns[i]).CreateCall(StackRestore, SavedPtr);
+    }
+  }
+
+  // If we are inlining tail call instruction through a call site that isn't
+  // marked 'tail', we must remove the tail marker for any calls in the inlined
+  // code.  Also, calls inlined through a 'nounwind' call site should be marked
+  // 'nounwind'.
+  if (InlinedFunctionInfo.ContainsCalls &&
+      (MustClearTailCallFlags || MarkNoUnwind)) {
+    for (Function::iterator BB = FirstNewBlock, E = Caller->end();
+         BB != E; ++BB)
+      for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I)
+        if (CallInst *CI = dyn_cast<CallInst>(I)) {
+          if (MustClearTailCallFlags)
+            CI->setTailCall(false);
+          if (MarkNoUnwind)
+            CI->setDoesNotThrow();
+        }
+  }
+
+  // If we are inlining for an invoke instruction, we must make sure to rewrite
+  // any call instructions into invoke instructions.
+  if (InvokeInst *II = dyn_cast<InvokeInst>(TheCall))
+    HandleInlinedInvoke(II, FirstNewBlock, InlinedFunctionInfo);
+
+  // If we cloned in _exactly one_ basic block, and if that block ends in a
+  // return instruction, we splice the body of the inlined callee directly into
+  // the calling basic block.
+  if (Returns.size() == 1 && std::distance(FirstNewBlock, Caller->end()) == 1) {
+    // Move all of the instructions right before the call.
+    OrigBB->getInstList().splice(TheCall, FirstNewBlock->getInstList(),
+                                 FirstNewBlock->begin(), FirstNewBlock->end());
+    // Remove the cloned basic block.
+    Caller->getBasicBlockList().pop_back();
+
+    // If the call site was an invoke instruction, add a branch to the normal
+    // destination.
+    if (InvokeInst *II = dyn_cast<InvokeInst>(TheCall)) {
+      BranchInst *NewBr = BranchInst::Create(II->getNormalDest(), TheCall);
+      NewBr->setDebugLoc(Returns[0]->getDebugLoc());
+    }
+
+    // If the return instruction returned a value, replace uses of the call with
+    // uses of the returned value.
+    if (!TheCall->use_empty()) {
+      ReturnInst *R = Returns[0];
+      if (TheCall == R->getReturnValue())
+        TheCall->replaceAllUsesWith(UndefValue::get(TheCall->getType()));
+      else
+        TheCall->replaceAllUsesWith(R->getReturnValue());
+    }
+    // Since we are now done with the Call/Invoke, we can delete it.
+    TheCall->eraseFromParent();
+
+    // Since we are now done with the return instruction, delete it also.
+    Returns[0]->eraseFromParent();
+
+    // We are now done with the inlining.
+    return true;
+  }
+
+  // Otherwise, we have the normal case, of more than one block to inline or
+  // multiple return sites.
+
+  // We want to clone the entire callee function into the hole between the
+  // "starter" and "ender" blocks.  How we accomplish this depends on whether
+  // this is an invoke instruction or a call instruction.
+  BasicBlock *AfterCallBB;
+  BranchInst *CreatedBranchToNormalDest = NULL;
+  if (InvokeInst *II = dyn_cast<InvokeInst>(TheCall)) {
+
+    // Add an unconditional branch to make this look like the CallInst case...
+    CreatedBranchToNormalDest = BranchInst::Create(II->getNormalDest(), TheCall);
+
+    // Split the basic block.  This guarantees that no PHI nodes will have to be
+    // updated due to new incoming edges, and make the invoke case more
+    // symmetric to the call case.
+    AfterCallBB = OrigBB->splitBasicBlock(CreatedBranchToNormalDest,
+                                          CalledFunc->getName()+".exit");
+
+  } else {  // It's a call
+    // If this is a call instruction, we need to split the basic block that
+    // the call lives in.
+    //
+    AfterCallBB = OrigBB->splitBasicBlock(TheCall,
+                                          CalledFunc->getName()+".exit");
+  }
+
+  // Change the branch that used to go to AfterCallBB to branch to the first
+  // basic block of the inlined function.
+  //
+  TerminatorInst *Br = OrigBB->getTerminator();
+  assert(Br && Br->getOpcode() == Instruction::Br &&
+         "splitBasicBlock broken!");
+  Br->setOperand(0, FirstNewBlock);
+
+
+  // Now that the function is correct, make it a little bit nicer.  In
+  // particular, move the basic blocks inserted from the end of the function
+  // into the space made by splitting the source basic block.
+  Caller->getBasicBlockList().splice(AfterCallBB, Caller->getBasicBlockList(),
+                                     FirstNewBlock, Caller->end());
+
+  // Handle all of the return instructions that we just cloned in, and eliminate
+  // any users of the original call/invoke instruction.
+  Type *RTy = CalledFunc->getReturnType();
+
+  PHINode *PHI = 0;
+  if (Returns.size() > 1) {
+    // The PHI node should go at the front of the new basic block to merge all
+    // possible incoming values.
+    if (!TheCall->use_empty()) {
+      PHI = PHINode::Create(RTy, Returns.size(), TheCall->getName(),
+                            AfterCallBB->begin());
+      // Anything that used the result of the function call should now use the
+      // PHI node as their operand.
+      TheCall->replaceAllUsesWith(PHI);
+    }
+
+    // Loop over all of the return instructions adding entries to the PHI node
+    // as appropriate.
+    if (PHI) {
+      for (unsigned i = 0, e = Returns.size(); i != e; ++i) {
+        ReturnInst *RI = Returns[i];
+        assert(RI->getReturnValue()->getType() == PHI->getType() &&
+               "Ret value not consistent in function!");
+        PHI->addIncoming(RI->getReturnValue(), RI->getParent());
+      }
+    }
+
+
+    // Add a branch to the merge points and remove return instructions.
+    DebugLoc Loc;
+    for (unsigned i = 0, e = Returns.size(); i != e; ++i) {
+      ReturnInst *RI = Returns[i];
+      BranchInst* BI = BranchInst::Create(AfterCallBB, RI);
+      Loc = RI->getDebugLoc();
+      BI->setDebugLoc(Loc);
+      RI->eraseFromParent();
+    }
+    // We need to set the debug location to *somewhere* inside the
+    // inlined function. The line number may be nonsensical, but the
+    // instruction will at least be associated with the right
+    // function.
+    if (CreatedBranchToNormalDest)
+      CreatedBranchToNormalDest->setDebugLoc(Loc);
+  } else if (!Returns.empty()) {
+    // Otherwise, if there is exactly one return value, just replace anything
+    // using the return value of the call with the computed value.
+    if (!TheCall->use_empty()) {
+      if (TheCall == Returns[0]->getReturnValue())
+        TheCall->replaceAllUsesWith(UndefValue::get(TheCall->getType()));
+      else
+        TheCall->replaceAllUsesWith(Returns[0]->getReturnValue());
+    }
+
+    // Update PHI nodes that use the ReturnBB to use the AfterCallBB.
+    BasicBlock *ReturnBB = Returns[0]->getParent();
+    ReturnBB->replaceAllUsesWith(AfterCallBB);
+
+    // Splice the code from the return block into the block that it will return
+    // to, which contains the code that was after the call.
+    AfterCallBB->getInstList().splice(AfterCallBB->begin(),
+                                      ReturnBB->getInstList());
+
+    if (CreatedBranchToNormalDest)
+      CreatedBranchToNormalDest->setDebugLoc(Returns[0]->getDebugLoc());
+
+    // Delete the return instruction now and empty ReturnBB now.
+    Returns[0]->eraseFromParent();
+    ReturnBB->eraseFromParent();
+  } else if (!TheCall->use_empty()) {
+    // No returns, but something is using the return value of the call.  Just
+    // nuke the result.
+    TheCall->replaceAllUsesWith(UndefValue::get(TheCall->getType()));
+  }
+
+  // Since we are now done with the Call/Invoke, we can delete it.
+  TheCall->eraseFromParent();
+
+  // We should always be able to fold the entry block of the function into the
+  // single predecessor of the block...
+  assert(cast<BranchInst>(Br)->isUnconditional() && "splitBasicBlock broken!");
+  BasicBlock *CalleeEntry = cast<BranchInst>(Br)->getSuccessor(0);
+
+  // Splice the code entry block into calling block, right before the
+  // unconditional branch.
+  CalleeEntry->replaceAllUsesWith(OrigBB);  // Update PHI nodes
+  OrigBB->getInstList().splice(Br, CalleeEntry->getInstList());
+
+  // Remove the unconditional branch.
+  OrigBB->getInstList().erase(Br);
+
+  // Now we can remove the CalleeEntry block, which is now empty.
+  Caller->getBasicBlockList().erase(CalleeEntry);
+
+  // If we inserted a phi node, check to see if it has a single value (e.g. all
+  // the entries are the same or undef).  If so, remove the PHI so it doesn't
+  // block other optimizations.
+  if (PHI) {
+    if (Value *V = SimplifyInstruction(PHI, IFI.TD)) {
+      PHI->replaceAllUsesWith(V);
+      PHI->eraseFromParent();
+    }
+  }
+
+  return true;
+}
+//===-- UnrollLoop.cpp - Loop unrolling utilities -------------------------===//
+//
+//                     The LLVM Compiler Infrastructure
+//
+// This file is distributed under the University of Illinois Open Source
+// License. See LICENSE.TXT for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This file implements some loop unrolling utilities. It does not define any
+// actual pass or policy, but provides a single function to perform loop
+// unrolling.
+//
+// The process of unrolling can produce extraneous basic blocks linked with
+// unconditional branches.  This will be corrected in the future.
+//
+//===----------------------------------------------------------------------===//
+
+#define DEBUG_TYPE "loop-unroll"
+#include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/LoopIterator.h"
+#include "llvm/Analysis/LoopPass.h"
+#include "llvm/Analysis/ScalarEvolution.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Transforms/Utils/SimplifyIndVar.h"
+using namespace llvm;
+
+// TODO: Should these be here or in LoopUnroll?
+STATISTIC(NumCompletelyUnrolled, "Number of loops completely unrolled");
+STATISTIC(NumUnrolled, "Number of loops unrolled (completely or otherwise)");
+
+/// RemapInstruction - Convert the instruction operands from referencing the
+/// current values into those specified by VMap.
+static inline void RemapInstruction(Instruction *I,
+                                    ValueToValueMapTy &VMap) {
+  for (unsigned op = 0, E = I->getNumOperands(); op != E; ++op) {
+    Value *Op = I->getOperand(op);
+    ValueToValueMapTy::iterator It = VMap.find(Op);
+    if (It != VMap.end())
+      I->setOperand(op, It->second);
+  }
+
+  if (PHINode *PN = dyn_cast<PHINode>(I)) {
+    for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i) {
+      ValueToValueMapTy::iterator It = VMap.find(PN->getIncomingBlock(i));
+      if (It != VMap.end())
+        PN->setIncomingBlock(i, cast<BasicBlock>(It->second));
+    }
+  }
+}
+
+/// FoldBlockIntoPredecessor - Folds a basic block into its predecessor if it
+/// only has one predecessor, and that predecessor only has one successor.
+/// The LoopInfo Analysis that is passed will be kept consistent.
+/// Returns the new combined block.
+static BasicBlock *FoldBlockIntoPredecessor(BasicBlock *BB, LoopInfo* LI,
+                                            LPPassManager *LPM) {
+  // Merge basic blocks into their predecessor if there is only one distinct
+  // pred, and if there is only one distinct successor of the predecessor, and
+  // if there are no PHI nodes.
+  BasicBlock *OnlyPred = BB->getSinglePredecessor();
+  if (!OnlyPred) return 0;
+
+  if (OnlyPred->getTerminator()->getNumSuccessors() != 1)
+    return 0;
+
+  DEBUG(dbgs() << "Merging: " << *BB << "into: " << *OnlyPred);
+
+  // Resolve any PHI nodes at the start of the block.  They are all
+  // guaranteed to have exactly one entry if they exist, unless there are
+  // multiple duplicate (but guaranteed to be equal) entries for the
+  // incoming edges.  This occurs when there are multiple edges from
+  // OnlyPred to OnlySucc.
+  FoldSingleEntryPHINodes(BB);
+
+  // Delete the unconditional branch from the predecessor...
+  OnlyPred->getInstList().pop_back();
+
+  // Make all PHI nodes that referred to BB now refer to Pred as their
+  // source...
+  BB->replaceAllUsesWith(OnlyPred);
+
+  // Move all definitions in the successor to the predecessor...
+  OnlyPred->getInstList().splice(OnlyPred->end(), BB->getInstList());
+
+  // OldName will be valid until erased.
+  StringRef OldName = BB->getName();
+
+  // Erase basic block from the function...
+
+  // ScalarEvolution holds references to loop exit blocks.
+  if (LPM) {
+    if (ScalarEvolution *SE = LPM->getAnalysisIfAvailable<ScalarEvolution>()) {
+      if (Loop *L = LI->getLoopFor(BB))
+        SE->forgetLoop(L);
+    }
+  }
+  LI->removeBlock(BB);
+
+  // Inherit predecessor's name if it exists...
+  if (!OldName.empty() && !OnlyPred->hasName())
+    OnlyPred->setName(OldName);
+
+  BB->eraseFromParent();
+
+  return OnlyPred;
+}
+
+/// Unroll the given loop by Count. The loop must be in LCSSA form. Returns true
+/// if unrolling was successful, or false if the loop was unmodified. Unrolling
+/// can only fail when the loop's latch block is not terminated by a conditional
+/// branch instruction. However, if the trip count (and multiple) are not known,
+/// loop unrolling will mostly produce more code that is no faster.
+///
+/// TripCount is generally defined as the number of times the loop header
+/// executes. UnrollLoop relaxes the definition to permit early exits: here
+/// TripCount is the iteration on which control exits LatchBlock if no early
+/// exits were taken. Note that UnrollLoop assumes that the loop counter test
+/// terminates LatchBlock in order to remove unnecesssary instances of the
+/// test. In other words, control may exit the loop prior to TripCount
+/// iterations via an early branch, but control may not exit the loop from the
+/// LatchBlock's terminator prior to TripCount iterations.
+///
+/// Similarly, TripMultiple divides the number of times that the LatchBlock may
+/// execute without exiting the loop.
+///
+/// The LoopInfo Analysis that is passed will be kept consistent.
+///
+/// If a LoopPassManager is passed in, and the loop is fully removed, it will be
+/// removed from the LoopPassManager as well. LPM can also be NULL.
+///
+/// This utility preserves LoopInfo. If DominatorTree or ScalarEvolution are
+/// available it must also preserve those analyses.
+bool llvm::UnrollLoop(Loop *L, unsigned Count, unsigned TripCount,
+                      bool AllowRuntime, unsigned TripMultiple,
+                      LoopInfo *LI, LPPassManager *LPM) {
+  BasicBlock *Preheader = L->getLoopPreheader();
+  if (!Preheader) {
+    DEBUG(dbgs() << "  Can't unroll; loop preheader-insertion failed.\n");
+    return false;
+  }
+
+  BasicBlock *LatchBlock = L->getLoopLatch();
+  if (!LatchBlock) {
+    DEBUG(dbgs() << "  Can't unroll; loop exit-block-insertion failed.\n");
+    return false;
+  }
+
+  // Loops with indirectbr cannot be cloned.
+  if (!L->isSafeToClone()) {
+    DEBUG(dbgs() << "  Can't unroll; Loop body cannot be cloned.\n");
+    return false;
+  }
+
+  BasicBlock *Header = L->getHeader();
+  BranchInst *BI = dyn_cast<BranchInst>(LatchBlock->getTerminator());
+
+  if (!BI || BI->isUnconditional()) {
+    // The loop-rotate pass can be helpful to avoid this in many cases.
+    DEBUG(dbgs() <<
+             "  Can't unroll; loop not terminated by a conditional branch.\n");
+    return false;
+  }
+
+  if (Header->hasAddressTaken()) {
+    // The loop-rotate pass can be helpful to avoid this in many cases.
+    DEBUG(dbgs() <<
+          "  Won't unroll loop: address of header block is taken.\n");
+    return false;
+  }
+
+  if (TripCount != 0)
+    DEBUG(dbgs() << "  Trip Count = " << TripCount << "\n");
+  if (TripMultiple != 1)
+    DEBUG(dbgs() << "  Trip Multiple = " << TripMultiple << "\n");
+
+  // Effectively "DCE" unrolled iterations that are beyond the tripcount
+  // and will never be executed.
+  if (TripCount != 0 && Count > TripCount)
+    Count = TripCount;
+
+  // Don't enter the unroll code if there is nothing to do. This way we don't
+  // need to support "partial unrolling by 1".
+  if (TripCount == 0 && Count < 2)
+    return false;
+
+  assert(Count > 0);
+  assert(TripMultiple > 0);
+  assert(TripCount == 0 || TripCount % TripMultiple == 0);
+
+  // Are we eliminating the loop control altogether?
+  bool CompletelyUnroll = Count == TripCount;
+
+  // We assume a run-time trip count if the compiler cannot
+  // figure out the loop trip count and the unroll-runtime
+  // flag is specified.
+  bool RuntimeTripCount = (TripCount == 0 && Count > 0 && AllowRuntime);
+
+  if (RuntimeTripCount && !UnrollRuntimeLoopProlog(L, Count, LI, LPM))
+    return false;
+
+  // Notify ScalarEvolution that the loop will be substantially changed,
+  // if not outright eliminated.
+  if (LPM) {
+    ScalarEvolution *SE = LPM->getAnalysisIfAvailable<ScalarEvolution>();
+    if (SE)
+      SE->forgetLoop(L);
+  }
+
+  // If we know the trip count, we know the multiple...
+  unsigned BreakoutTrip = 0;
+  if (TripCount != 0) {
+    BreakoutTrip = TripCount % Count;
+    TripMultiple = 0;
+  } else {
+    // Figure out what multiple to use.
+    BreakoutTrip = TripMultiple =
+      (unsigned)GreatestCommonDivisor64(Count, TripMultiple);
+  }
+
+  if (CompletelyUnroll) {
+    DEBUG(dbgs() << "COMPLETELY UNROLLING loop %" << Header->getName()
+          << " with trip count " << TripCount << "!\n");
+  } else {
+    DEBUG(dbgs() << "UNROLLING loop %" << Header->getName()
+          << " by " << Count);
+    if (TripMultiple == 0 || BreakoutTrip != TripMultiple) {
+      DEBUG(dbgs() << " with a breakout at trip " << BreakoutTrip);
+    } else if (TripMultiple != 1) {
+      DEBUG(dbgs() << " with " << TripMultiple << " trips per branch");
+    } else if (RuntimeTripCount) {
+      DEBUG(dbgs() << " with run-time trip count");
+    }
+    DEBUG(dbgs() << "!\n");
+  }
+
+  bool ContinueOnTrue = L->contains(BI->getSuccessor(0));
+  BasicBlock *LoopExit = BI->getSuccessor(ContinueOnTrue);
+
+  // For the first iteration of the loop, we should use the precloned values for
+  // PHI nodes.  Insert associations now.
+  ValueToValueMapTy LastValueMap;
+  std::vector<PHINode*> OrigPHINode;
+  for (BasicBlock::iterator I = Header->begin(); isa<PHINode>(I); ++I) {
+    OrigPHINode.push_back(cast<PHINode>(I));
+  }
+
+  std::vector<BasicBlock*> Headers;
+  std::vector<BasicBlock*> Latches;
+  Headers.push_back(Header);
+  Latches.push_back(LatchBlock);
+
+  // The current on-the-fly SSA update requires blocks to be processed in
+  // reverse postorder so that LastValueMap contains the correct value at each
+  // exit.
+  LoopBlocksDFS DFS(L);
+  DFS.perform(LI);
+
+  // Stash the DFS iterators before adding blocks to the loop.
+  LoopBlocksDFS::RPOIterator BlockBegin = DFS.beginRPO();
+  LoopBlocksDFS::RPOIterator BlockEnd = DFS.endRPO();
+
+  for (unsigned It = 1; It != Count; ++It) {
+    std::vector<BasicBlock*> NewBlocks;
+
+    for (LoopBlocksDFS::RPOIterator BB = BlockBegin; BB != BlockEnd; ++BB) {
+      ValueToValueMapTy VMap;
+      BasicBlock *New = CloneBasicBlock(*BB, VMap, "." + Twine(It));
+      Header->getParent()->getBasicBlockList().push_back(New);
+
+      // Loop over all of the PHI nodes in the block, changing them to use the
+      // incoming values from the previous block.
+      if (*BB == Header)
+        for (unsigned i = 0, e = OrigPHINode.size(); i != e; ++i) {
+          PHINode *NewPHI = cast<PHINode>(VMap[OrigPHINode[i]]);
+          Value *InVal = NewPHI->getIncomingValueForBlock(LatchBlock);
+          if (Instruction *InValI = dyn_cast<Instruction>(InVal))
+            if (It > 1 && L->contains(InValI))
+              InVal = LastValueMap[InValI];
+          VMap[OrigPHINode[i]] = InVal;
+          New->getInstList().erase(NewPHI);
+        }
+
+      // Update our running map of newest clones
+      LastValueMap[*BB] = New;
+      for (ValueToValueMapTy::iterator VI = VMap.begin(), VE = VMap.end();
+           VI != VE; ++VI)
+        LastValueMap[VI->first] = VI->second;
+
+      L->addBasicBlockToLoop(New, LI->getBase());
+
+      // Add phi entries for newly created values to all exit blocks.
+      for (succ_iterator SI = succ_begin(*BB), SE = succ_end(*BB);
+           SI != SE; ++SI) {
+        if (L->contains(*SI))
+          continue;
+        for (BasicBlock::iterator BBI = (*SI)->begin();
+             PHINode *phi = dyn_cast<PHINode>(BBI); ++BBI) {
+          Value *Incoming = phi->getIncomingValueForBlock(*BB);
+          ValueToValueMapTy::iterator It = LastValueMap.find(Incoming);
+          if (It != LastValueMap.end())
+            Incoming = It->second;
+          phi->addIncoming(Incoming, New);
+        }
+      }
+      // Keep track of new headers and latches as we create them, so that
+      // we can insert the proper branches later.
+      if (*BB == Header)
+        Headers.push_back(New);
+      if (*BB == LatchBlock)
+        Latches.push_back(New);
+
+      NewBlocks.push_back(New);
+    }
+
+    // Remap all instructions in the most recent iteration
+    for (unsigned i = 0; i < NewBlocks.size(); ++i)
+      for (BasicBlock::iterator I = NewBlocks[i]->begin(),
+           E = NewBlocks[i]->end(); I != E; ++I)
+        ::RemapInstruction(I, LastValueMap);
+  }
+
+  // Loop over the PHI nodes in the original block, setting incoming values.
+  for (unsigned i = 0, e = OrigPHINode.size(); i != e; ++i) {
+    PHINode *PN = OrigPHINode[i];
+    if (CompletelyUnroll) {
+      PN->replaceAllUsesWith(PN->getIncomingValueForBlock(Preheader));
+      Header->getInstList().erase(PN);
+    }
+    else if (Count > 1) {
+      Value *InVal = PN->removeIncomingValue(LatchBlock, false);
+      // If this value was defined in the loop, take the value defined by the
+      // last iteration of the loop.
+      if (Instruction *InValI = dyn_cast<Instruction>(InVal)) {
+        if (L->contains(InValI))
+          InVal = LastValueMap[InVal];
+      }
+      assert(Latches.back() == LastValueMap[LatchBlock] && "bad last latch");
+      PN->addIncoming(InVal, Latches.back());
+    }
+  }
+
+  // Now that all the basic blocks for the unrolled iterations are in place,
+  // set up the branches to connect them.
+  for (unsigned i = 0, e = Latches.size(); i != e; ++i) {
+    // The original branch was replicated in each unrolled iteration.
+    BranchInst *Term = cast<BranchInst>(Latches[i]->getTerminator());
+
+    // The branch destination.
+    unsigned j = (i + 1) % e;
+    BasicBlock *Dest = Headers[j];
+    bool NeedConditional = true;
+
+    if (RuntimeTripCount && j != 0) {
+      NeedConditional = false;
+    }
+
+    // For a complete unroll, make the last iteration end with a branch
+    // to the exit block.
+    if (CompletelyUnroll && j == 0) {
+      Dest = LoopExit;
+      NeedConditional = false;
+    }
+
+    // If we know the trip count or a multiple of it, we can safely use an
+    // unconditional branch for some iterations.
+    if (j != BreakoutTrip && (TripMultiple == 0 || j % TripMultiple != 0)) {
+      NeedConditional = false;
+    }
+
+    if (NeedConditional) {
+      // Update the conditional branch's successor for the following
+      // iteration.
+      Term->setSuccessor(!ContinueOnTrue, Dest);
+    } else {
+      // Remove phi operands at this loop exit
+      if (Dest != LoopExit) {
+        BasicBlock *BB = Latches[i];
+        for (succ_iterator SI = succ_begin(BB), SE = succ_end(BB);
+             SI != SE; ++SI) {
+          if (*SI == Headers[i])
+            continue;
+          for (BasicBlock::iterator BBI = (*SI)->begin();
+               PHINode *Phi = dyn_cast<PHINode>(BBI); ++BBI) {
+            Phi->removeIncomingValue(BB, false);
+          }
+        }
+      }
+      // Replace the conditional branch with an unconditional one.
+      BranchInst::Create(Dest, Term);
+      Term->eraseFromParent();
+    }
+  }
+
+  // Merge adjacent basic blocks, if possible.
+  for (unsigned i = 0, e = Latches.size(); i != e; ++i) {
+    BranchInst *Term = cast<BranchInst>(Latches[i]->getTerminator());
+    if (Term->isUnconditional()) {
+      BasicBlock *Dest = Term->getSuccessor(0);
+      if (BasicBlock *Fold = FoldBlockIntoPredecessor(Dest, LI, LPM))
+        std::replace(Latches.begin(), Latches.end(), Dest, Fold);
+    }
+  }
+
+  if (LPM) {
+    // FIXME: Reconstruct dom info, because it is not preserved properly.
+    // Incrementally updating domtree after loop unrolling would be easy.
+    if (DominatorTree *DT = LPM->getAnalysisIfAvailable<DominatorTree>())
+      DT->runOnFunction(*L->getHeader()->getParent());
+
+    // Simplify any new induction variables in the partially unrolled loop.
+    ScalarEvolution *SE = LPM->getAnalysisIfAvailable<ScalarEvolution>();
+    if (SE && !CompletelyUnroll) {
+      SmallVector<WeakVH, 16> DeadInsts;
+      simplifyLoopIVs(L, SE, LPM, DeadInsts);
+
+      // Aggressively clean up dead instructions that simplifyLoopIVs already
+      // identified. Any remaining should be cleaned up below.
+      while (!DeadInsts.empty())
+        if (Instruction *Inst =
+            dyn_cast_or_null<Instruction>(&*DeadInsts.pop_back_val()))
+          RecursivelyDeleteTriviallyDeadInstructions(Inst);
+    }
+  }
+  // At this point, the code is well formed.  We now do a quick sweep over the
+  // inserted code, doing constant propagation and dead code elimination as we
+  // go.
+  const std::vector<BasicBlock*> &NewLoopBlocks = L->getBlocks();
+  for (std::vector<BasicBlock*>::const_iterator BB = NewLoopBlocks.begin(),
+       BBE = NewLoopBlocks.end(); BB != BBE; ++BB)
+    for (BasicBlock::iterator I = (*BB)->begin(), E = (*BB)->end(); I != E; ) {
+      Instruction *Inst = I++;
+
+      if (isInstructionTriviallyDead(Inst))
+        (*BB)->getInstList().erase(Inst);
+      else if (Value *V = SimplifyInstruction(Inst))
+        if (LI->replacementPreservesLCSSAForm(Inst, V)) {
+          Inst->replaceAllUsesWith(V);
+          (*BB)->getInstList().erase(Inst);
+        }
+    }
+
+  NumCompletelyUnrolled += CompletelyUnroll;
+  ++NumUnrolled;
+  // Remove the loop from the LoopPassManager if it's completely removed.
+  if (CompletelyUnroll && LPM != NULL)
+    LPM->deleteLoopFromQueue(L);
+
+  return true;
+}
