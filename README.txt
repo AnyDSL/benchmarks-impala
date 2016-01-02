@@ -1,6 +1,6 @@
 # impala
 
-all benchmarks have been performed with the "cgo" branch:
+all benchmarks have been performed with the "cgo15" tag:
 
 git clone git@github.com:AnyDSL/thorin.git
 git clone git@github.com:AnyDSL/impala.git
