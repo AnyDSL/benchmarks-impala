@@ -12,10 +12,10 @@ static mut checksum = 0;
 
 fn take_address(a: &[int * 16]) -> () {}
 
-fn range(a: int, b: int, body: fn(int, fn())) -> () {
+fn range(a: int, b: int, body: fn(int) -> ()) -> () {
     if a < b {
         body(a);
-        range(a+1, b, body, return)
+        range(a+1, b, body)
     }
 }
 
@@ -80,7 +80,7 @@ fn tk(n: int) -> () {
     }
 }
 
-fn main(n: int) -> () {
+extern fn main_impala(n: int) -> () {
     max_n = n;
     for i in range(0, max_n) {
         s(i) = i;

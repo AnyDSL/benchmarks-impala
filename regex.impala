@@ -28,16 +28,16 @@ struct fbuf_t {
     len:  u64,
 }
 
-fn range(a: int, b: int, body: fn(int, fn())) -> () {
+fn range(a: int, b: int, body: fn(int) -> ()) -> () {
     if a < b {
         body(a);
-        range(a+1, b, body, return)
+        range(a+1, b, body)
     }
 }
 
 static nullptr = 0 as &[u8];
 
-fn fb_need(mut b: &fbuf_t, mut need: u64) -> u64 {
+fn fb_need(b: &mut fbuf_t, mut need: u64) -> u64 {
     need += b.len;
     if need > b.size {
         if b.size == 0_u64 {
@@ -55,7 +55,7 @@ fn fb_need(mut b: &fbuf_t, mut need: u64) -> u64 {
 static FB_MINREAD = 3_u64 << 16_u64;
 
 // Read all of a stdio stream into dst buffer.
-fn fb_readall(mut dst: &fbuf_t, f: FILE) -> u64 {
+fn fb_readall(dst: &mut fbuf_t, f: FILE) -> u64 {
     let mut dpi = fb_need(dst, FB_MINREAD);
     while true {
         let n = fread(&dst.buf(dpi), 1_u64, dst.size-dst.len, f);
@@ -70,7 +70,7 @@ fn fb_readall(mut dst: &fbuf_t, f: FILE) -> u64 {
 }
 
 // Substitute pattern p with replacement r, copying from src to dst buffer.
-fn fb_subst(mut dst: &fbuf_t, mut src: &fbuf_t, p: &[u8], mut r: &[u8]) -> u64 {
+fn fb_subst(dst: &mut fbuf_t, src: &mut fbuf_t, p: &[u8], r: &[u8]) -> u64 {
     let mut re_eo: int;
     let mut re_e: &[u8];
     let re = pcre_compile(p, PCRE_CASELESS, &re_e, &re_eo, nullptr);
@@ -140,7 +140,7 @@ static NUM_PAT = 11;
 
 fn take_address(a: &[&[u8]]) -> () {}
 
-fn main(n: int) -> () {
+extern fn main_impala(n: int) -> () {
     let mut seq = [
         fbuf_t{buf: nullptr, size: 0_u64, len: 0_u64},
         fbuf_t{buf: nullptr, size: 0_u64, len: 0_u64}
@@ -148,8 +148,8 @@ fn main(n: int) -> () {
     let mut variants: [&[u8] * 9] = [(&v0) as &[u8], &v1, &v2, &v3, &v4, &v5, &v6, &v7, &v8];
     take_address(&variants);
 
-    let ilen = fb_readall(&seq(0), get_stdin());
-    let clen = fb_subst(&seq(1), &seq(0), ">.*|\n", "");
+    let ilen = fb_readall(&mut seq(0), get_stdin());
+    let clen = fb_subst(&mut seq(1), &mut seq(0), ">.*|\n", "");
 
     for i in range(0, NUM_VARIANTS) {
         print_num_matches(variants(i), fb_countmatches(&seq(1), variants(i)));
@@ -160,7 +160,7 @@ fn main(n: int) -> () {
     let mut slen = 0_u64;
     let mut flip = 1;
     for i in range(0, NUM_PAT) {
-        slen = fb_subst(&seq(1-flip), &seq(flip), &subst(i), pat(i));
+        slen = fb_subst(&mut seq(1-flip), &mut seq(flip), &subst(i), pat(i));
         flip = 1-flip;
     }
     println("");

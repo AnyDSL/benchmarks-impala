@@ -13,10 +13,10 @@ struct nucleotide_info {
     probability: float,
 }
 
-fn range(a: int, b: int, body: fn(int, fn())) -> () {
+fn range(a: int, b: int, body: fn(int) -> ()) -> () {
     if a < b {
         body(a);
-        range(a+1, b, body, return)
+        range(a+1, b, body)
     }
 }
 
@@ -154,7 +154,7 @@ fn generate_And_Wrap_Pseudorandom_DNA_Sequence(
     }
 }
 
-fn main(n: int) -> () {
+extern fn main_impala(n: int) -> () {
     println(">ONE Homo sapiens alu");
     let mut homo_Sapiens_Alu =
         "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCGGATCACCTGAGGTC"
