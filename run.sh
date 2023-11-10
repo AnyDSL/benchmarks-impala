@@ -22,7 +22,7 @@ do
     clang -O3 -std=gnu99 ${INC_FLAGS} ${F}.c -o ${F}_c.out ${LD_FLAGS} -lm -lpcre -lgmp -s
 
     echo ">>> building ${F}_impala.out"
-    impala ${F}.impala -emit-llvm -O3
+    impala ${F}.impala -emit-llvm 
     clang -O3 -flto lib.o ${F}.ll ${LD_FLAGS} -lm -lpcre -lgmp -s -o ${F}_impala.out
 
     if [ -e ${F}.rs ]
