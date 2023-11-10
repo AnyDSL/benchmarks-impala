@@ -10,8 +10,6 @@ static mut maxflips = 0;
 static mut odd = 0;
 static mut checksum = 0;
 
-fn take_address(a: &[int * 16]) -> () {}
-
 fn range(a: int, b: int, body: fn(int) -> ()) -> () {
     if a < b {
         body(a);
@@ -53,7 +51,6 @@ fn rotate(n: int) -> () {
 /* Tompkin-Paige iterative perm generation */
 fn tk(n: int) -> () {
     let mut c = [0, .. 16];
-    take_address(&c); // HACK to prevent SSA contruction of c
     let mut i = 0;
     while i < n {
         rotate(i);
@@ -66,7 +63,7 @@ fn tk(n: int) -> () {
         i = 1;
         odd = !odd;
         if s(0) != 0 {
-            let f = 
+            let f =
                 if s(s(0)) != 0 {
                     flip()
                 } else {

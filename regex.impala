@@ -138,15 +138,12 @@ static mut pat10 = "(c|t)";
 
 static NUM_PAT = 11;
 
-fn take_address(a: &[&[u8]]) -> () {}
-
 extern fn main_impala(n: int) -> () {
     let mut seq = [
         fbuf_t{buf: nullptr, size: 0_u64, len: 0_u64},
         fbuf_t{buf: nullptr, size: 0_u64, len: 0_u64}
     ];
     let mut variants: [&[u8] * 9] = [(&v0) as &[u8], &v1, &v2, &v3, &v4, &v5, &v6, &v7, &v8];
-    take_address(&variants);
 
     let ilen = fb_readall(&mut seq(0), get_stdin());
     let clen = fb_subst(&mut seq(1), &mut seq(0), ">.*|\n", "");
@@ -156,7 +153,6 @@ extern fn main_impala(n: int) -> () {
     }
 
     let mut pat: [&[u8] * 11] = [(&pat0) as &[u8], &pat1, &pat2, &pat3, &pat4, &pat5, &pat6, &pat7, &pat8, &pat9, &pat10];
-    take_address(&pat);
     let mut slen = 0_u64;
     let mut flip = 1;
     for i in range(0, NUM_PAT) {

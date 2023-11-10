@@ -1,7 +1,7 @@
 /* The Computer Language Benchmarks Game
  * http://benchmarksgame.alioth.debian.org/
  *
- * contributed by Bob W 
+ * contributed by Bob W
  */
 
 extern "C" {
@@ -24,8 +24,6 @@ fn errex(s: &[u8]) -> () {            // error message+value, return 1
     println("\n");
 }
 
-fn take_address(&[u8]) -> () {}
-
 extern fn main_impala(n: int) -> () {                                // ***** main *****
     let mut jjj: [u8*82];        // allocate input line buffer
     let mut qqq = ~[QBFSIZE: u8];   // output buffer (dyn. size)
@@ -44,8 +42,6 @@ extern fn main_impala(n: int) -> () {                                // ***** ma
                    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
                    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
                    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"; // char conversion table
-    take_address(&xtab);
-    
     let mut pj = read(&jjj, JBFSIZE) == 1;                 // fetch 1st line
 
     if (!pj) {
@@ -62,7 +58,7 @@ extern fn main_impala(n: int) -> () {                                // ***** ma
 
         let mut pr = pqstop;
         let mut pq = 1;
-        
+
         while true {                    // LOOP: fill output buffer
             pj = read(&jjj, JBFSIZE) == 1;     // get line from stdin
             if !pj || (jjj(0) == '>') {
@@ -88,7 +84,7 @@ extern fn main_impala(n: int) -> () {                                // ***** ma
                     qqq(--pr) = c;
                 }
             }
-            
+
             pq++;
         }
 
