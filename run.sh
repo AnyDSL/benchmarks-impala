@@ -25,18 +25,21 @@ do
     impala ${F}.impala -emit-llvm 
     clang -O3 -flto lib.o ${F}.ll ${LD_FLAGS} -lm -lpcre -lgmp -s -o ${F}_impala.out
 
-    if [ -e ${F}.rs ]
+    if [ -e ${F}.rs -a "${NO_RUST}" == "" ]
     then
         echo ">>> building ${F}_rs.out"
         rustc --opt-level 3 ${F}.rs -o ${F}_rs.out
     fi
 
-    echo ">>> building ${F}_hs.out"
-    if [ "${F}" == "fasta" ]
+    if [ "${NO_HASKELL}" == "" ]
     then
-        ghc --make -fllvm -O3 -XBangPatterns -rtsopts -XOverloadedStrings ${F}.hs -o ${F}_hs.out
-    else
-        ghc --make -fllvm -O3 -XBangPatterns -rtsopts -funfolding-use-threshold=32 -XMagicHash -XUnboxedTuples ${F}.hs -o ${F}_hs.out
+        echo ">>> building ${F}_hs.out"
+        if [ "${F}" == "fasta" ]
+        then
+            ghc --make -fllvm -O3 -XBangPatterns -rtsopts -XOverloadedStrings ${F}.hs -o ${F}_hs.out
+        else
+            ghc --make -fllvm -O3 -XBangPatterns -rtsopts -funfolding-use-threshold=32 -XMagicHash -XUnboxedTuples ${F}.hs -o ${F}_hs.out
+        fi
     fi
 done
 
